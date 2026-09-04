@@ -1,0 +1,1121 @@
+<?php
+
+namespace App\Controllers;
+
+use App\Libraries\Barcode_lib;
+use App\Libraries\Mailchimp_lib;
+use App\Libraries\Receiving_lib;
+use App\Libraries\Sale_lib;
+use App\Libraries\Tax_lib;
+use App\Models\Appconfig;
+use App\Models\Attribute;
+use App\Models\Customer_rewards;
+use App\Models\Dinner_table;
+use App\Models\Item;
+use App\Models\Module;
+use App\Models\Enums\Rounding_mode;
+use App\Models\Stock_location;
+use App\Models\Tax;
+use CodeIgniter\Database\BaseConnection;
+use CodeIgniter\Encryption\EncrypterInterface;
+use CodeIgniter\HTTP\ResponseInterface;
+use Config\Database;
+use Config\OSPOS;
+use Config\Services;
+use DirectoryIterator;
+use NumberFormatter;
+use ReflectionException;
+
+class Config extends Secure_Controller
+{
+    protected $helpers = ['security'];
+    private BaseConnection $db;
+    private EncrypterInterface $encrypter;
+    private Barcode_lib $barcode_lib;
+    private Sale_lib $sale_lib;
+    private Receiving_lib $receiving_lib;
+    private Tax_lib $tax_lib;
+    private Appconfig $appconfig;
+    private Attribute $attribute;
+    private Customer_rewards $customer_rewards;
+    private Dinner_table $dinner_table;
+    protected Module $module;
+    private Stock_location $stock_location;
+    private Tax $tax;
+    private array $config;
+
+
+    public function __construct()
+    {
+        parent::__construct('config');
+
+        $this->barcode_lib = new Barcode_lib();
+        $this->sale_lib = new Sale_lib();
+        $this->receiving_lib = new receiving_lib();
+        $this->tax_lib = new Tax_lib();
+        $this->appconfig = model(Appconfig::class);
+        $this->attribute = model(Attribute::class);
+        $this->customer_rewards = model(Customer_rewards::class);
+        $this->dinner_table = model(Dinner_table::class);
+        $this->module = model(Module::class);
+        $this->stock_location = model(Stock_location::class);
+        $this->tax = model(Tax::class);
+        $this->config = config(OSPOS::class)->settings;
+        $this->db = Database::connect();
+
+        helper('security');
+        if (checkEncryption()) {
+            $this->encrypter = Services::encrypter();
+        } else {
+            log_message('alert', 'Error preparing encryption key');
+        }
+    }
+
+    /**
+     * This function loads all the licenses starting with the first one being OSPOS one
+     */
+    private function _licenses(): array    // TODO: remove hungarian notation.  Super long function.  Perhaps we need to refactor out functions?
+    {
+        $i = 0;
+        $composer = false;
+        $npmProd = false;
+        $npmDev = false;
+        $license = [];
+
+        $license[$i]['title'] = 'Open Source Point of Sale ' . config('App')->application_version;
+
+        if (file_exists('license/LICENSE')) {
+            $license[$i]['text'] = file_get_contents('license/LICENSE', false, null, 0, 3000);
+        } else {
+            $license[$i]['text'] = 'LICENSE file must be in OSPOS license directory. You are not allowed to use OSPOS application until the distribution copy of LICENSE file is present.';
+        }
+
+        $dir = new DirectoryIterator('license');    // Read all the files in the dir license
+
+        foreach ($dir as $fileinfo) {    // TODO: $fileinfo doesn't match our variable naming convention
+            // License files must be in couples: .version (name & version) & .license (license text)
+            if ($fileinfo->isFile()) {
+                if ($fileinfo->getExtension() == 'version') {
+                    ++$i;
+
+                    $basename = 'license/' . $fileinfo->getBasename('.version');
+
+                    $license[$i]['title'] = file_get_contents($basename . '.version', false, null, 0, 100);
+
+                    $license_text_file = $basename . '.license';
+
+                    if (file_exists($license_text_file)) {
+                        $license[$i]['text'] = file_get_contents($license_text_file, false, null, 0, 2000);
+                    } else {
+                        $license[$i]['text'] = $license_text_file . ' file is missing';
+                    }
+                } elseif ($fileinfo->getBasename() == 'composer.LICENSES') {
+                    // Set a flag to indicate that the composer.LICENSES file is available and needs to be attached at the end
+                    $composer = true;
+                } elseif ($fileinfo->getBasename() == 'npm-prod.LICENSES') {
+                    // Set a flag to indicate that the npm-prod.LICENSES file is available and needs to be attached at the end
+                    $npmProd = true;
+                } elseif ($fileinfo->getBasename() == 'npm-dev.LICENSES') {
+                    // Set a flag to indicate that the npm-dev.LICENSES file is available and needs to be attached at the end
+                    $npmDev = true;
+                }
+            }
+        }
+
+        // Attach the licenses from the LICENSES file generated by Composer
+        if ($composer) {
+            ++$i;
+            $license[$i]['title'] = 'Composer Libraries';
+            $license[$i]['text'] = '';
+
+            $file = file_get_contents('license/composer.LICENSES');
+            $array = json_decode($file, true);
+
+            if (isset($array['dependencies'])) {
+                foreach ($array['dependencies'] as $dependency => $details) {
+                    $license[$i]['text'] .= "library: $dependency\n";
+
+                    foreach ($details as $key => $value) {
+                        if (is_array($value)) {
+                            $license[$i]['text'] .= "$key: " . implode(' ', $value) . "\n";
+                        } else {
+                            $license[$i]['text'] .= "$key: $value\n";
+                        }
+                    }
+
+                    $license[$i]['text'] .= "\n";
+                }
+                $license[$i]['text'] = rtrim($license[$i]['text'], "\n");
+            }
+        }
+
+        // Attach the licenses from the LICENSES file generated by license-report
+        if ($npmProd) {
+            ++$i;
+            $license[$i]['title'] = 'NPM Production Libraries';
+            $license[$i]['text'] = '';
+
+            $file = file_get_contents('license/npm-prod.LICENSES');
+            $array = json_decode($file, true);
+
+            foreach ($array as $dependency) {
+                $license[$i]['text'] .= "library: {$dependency['name']}\n";
+                $license[$i]['text'] .= "authors: {$dependency['author']}\n";
+                $license[$i]['text'] .= "website: {$dependency['homepage']}\n";
+                $license[$i]['text'] .= "version: {$dependency['installedVersion']}\n";
+                $license[$i]['text'] .= "license: {$dependency['licenseType']}\n";
+
+                $license[$i]['text'] .= "\n";
+            }
+            $license[$i]['text'] = rtrim($license[$i]['text'], "\n");
+        }
+
+        if ($npmDev) {
+            ++$i;
+            $license[$i]['title'] = 'NPM Development Libraries';
+            $license[$i]['text'] = '';
+
+            $file = file_get_contents('license/npm-dev.LICENSES');
+            $array = json_decode($file, true);
+
+            foreach ($array as $dependency) {
+                $license[$i]['text'] .= "library: {$dependency['name']}\n";
+                $license[$i]['text'] .= "authors: {$dependency['author']}\n";
+                $license[$i]['text'] .= "website: {$dependency['homepage']}\n";
+                $license[$i]['text'] .= "version: {$dependency['installedVersion']}\n";
+                $license[$i]['text'] .= "license: {$dependency['licenseType']}\n";
+
+                $license[$i]['text'] .= "\n";
+            }
+            $license[$i]['text'] = rtrim($license[$i]['text'], "\n");
+        }
+
+        return $license;
+    }
+
+    /**
+     * This function loads all the available themes in the dist/bootswatch directory
+     * @return array
+     */
+    private function _themes(): array    // TODO: Hungarian notation
+    {
+        $themes = [];
+
+        // Read all themes in the dist folder
+        $dir = new DirectoryIterator('resources/bootswatch');
+
+        foreach ($dir as $dirinfo) {    // TODO: $dirinfo doesn't follow naming convention
+            if ($dirinfo->isDir() && !$dirinfo->isDot() && $dirinfo->getFileName() != 'fonts') {
+                $file = $dirinfo->getFileName();
+                $themes[$file] = ucfirst($file);
+            }
+        }
+
+        asort($themes);
+
+        return $themes;
+    }
+
+    /**
+     * @return string
+     */
+    public function getIndex(): string
+    {
+        $data['config'] = $this->config;
+        $data['stock_locations'] = $this->stock_location->get_all()->getResultArray();
+        $data['dinner_tables'] = $this->dinner_table->get_all()->getResultArray();
+        $data['customer_rewards'] = $this->customer_rewards->get_all()->getResultArray();
+        $data['support_barcode'] = $this->barcode_lib->get_list_barcodes();
+        $data['barcode_fonts'] = $this->barcode_lib->listfonts('fonts');
+        $data['logo_exists'] = $this->config['company_logo'] != '';
+        $data['logo_src'] = !empty($this->config['company_logo']) ? base_url('uploads/' . $this->config['company_logo']) : '';
+        $data['line_sequence_options'] = $this->sale_lib->get_line_sequence_options();
+        $data['register_mode_options'] = $this->sale_lib->get_register_mode_options();
+        $data['invoice_type_options'] = $this->sale_lib->get_invoice_type_options();
+        $data['keyboardShortcutOptions'] = $this->sale_lib->getKeyShortcutsOptions();
+        $data['keyboardShortcuts'] = $this->sale_lib->getKeyShortcuts();
+        $data['rounding_options'] = rounding_mode::get_rounding_options();
+        $data['tax_code_options'] = $this->tax_lib->get_tax_code_options();
+        $data['tax_category_options'] = $this->tax_lib->get_tax_category_options();
+        $data['tax_jurisdiction_options'] = $this->tax_lib->get_tax_jurisdiction_options();
+        $data['show_office_group'] = $this->module->get_show_office_group();
+        $data['currency_code'] = $this->config['currency_code'] ?? '';
+        $data['dbVersion'] = mysqli_get_server_info($this->db->getConnection());
+
+        // Load all the license statements, they are already XSS cleaned in the private function
+        $data['licenses'] = $this->_licenses();
+
+        // Load all the themes, already XSS cleaned in the private function
+        $data['themes'] = $this->_themes();
+
+        // General related fields
+        $image_allowed_types = ['jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'png', 'tif', 'tiff'];
+        $data['image_allowed_types'] = array_combine($image_allowed_types, $image_allowed_types);
+        $data['selected_image_allowed_types'] = explode(',', $this->config['image_allowed_types']);
+
+        // Integrations Related fields
+        $data['mailchimp']    = [];
+
+        if (checkEncryption()) {    // TODO: Hungarian notation
+            if (!isset($this->encrypter)) {
+                helper('security');
+                $this->encrypter = Services::encrypter();
+            }
+
+            $data['mailchimp']['api_key'] = (isset($this->config['mailchimp_api_key']) && !empty($this->config['mailchimp_api_key']))
+                ? $this->encrypter->decrypt($this->config['mailchimp_api_key'])
+                : '';
+
+            $data['mailchimp']['list_id'] = (isset($this->config['mailchimp_list_id']) && !empty($this->config['mailchimp_list_id']))
+                ? $this->encrypter->decrypt($this->config['mailchimp_list_id'])
+                : '';
+
+            // Remove any backup of .env created by check_encryption()
+            removeBackup();
+        } else {
+            $data['mailchimp']['api_key'] = '';
+            $data['mailchimp']['list_id'] = '';
+        }
+
+        $data['mailchimp']['lists'] = $this->_mailchimp();
+
+        return view('configs/manage', $data);
+    }
+
+    /**
+     * Saves company information. Used in app/Views/configs/info_config.php
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveInfo(): ResponseInterface
+    {
+        $upload_data = $this->upload_logo();
+        $upload_success = empty($upload_data['error']);
+
+        $batch_save_data = [
+            'company'       => $this->request->getPost('company'),
+            'address'       => $this->request->getPost('address'),
+            'phone'         => $this->request->getPost('phone'),
+            'email'         => strtolower($this->request->getPost('email', FILTER_SANITIZE_EMAIL)),
+            'fax'           => $this->request->getPost('fax'),
+            'website'       => $this->request->getPost('website', FILTER_SANITIZE_URL),
+            'return_policy' => $this->request->getPost('return_policy')
+        ];
+
+        if (!empty($upload_data['orig_name']) && $upload_data['raw_name']) {
+            $batch_save_data['company_logo'] = $upload_data['raw_name'] . '.' . $upload_data['file_ext'];
+        }
+
+        $result = $this->appconfig->batch_save($batch_save_data);
+        $success = $upload_success && $result;
+        $message = lang('Config.saved_' . ($success ? '' : 'un') . 'successfully');
+        $message = $upload_success ? $message : strip_tags($upload_data['error']);
+
+        return $this->response->setJSON(['success' => $success, 'message' => $message]);
+    }
+
+
+    /**
+     * @return array
+     */
+    private function upload_logo(): array
+    {
+        $file = $this->request->getFile('company_logo');
+        if (!$file) {
+            return [];
+        }
+
+        helper(['form']);
+        $validation_rule = [
+            'company_logo' => [
+                'label' => 'Company logo',
+                'rules' => [
+                    'uploaded[company_logo]',
+                    'is_image[company_logo]',
+                    'max_size[company_logo,1024]',
+                    'mime_in[company_logo,image/png,image/jpg,image/jpeg,image/gif]',
+                    'ext_in[company_logo,png,jpg,gif]',
+                    'max_dims[company_logo,800,680]',
+                ]
+            ]
+        ];
+
+        if (!$this->validate($validation_rule)) {
+            return (['error' => $this->validator->getError('company_logo')]);
+        }
+
+
+        $filename = $file->getClientName();
+        $info = pathinfo($filename);
+        helper('security');
+
+        $file_info = [
+            'orig_name' => $filename,
+            'raw_name'  => sanitize_filename($info['filename']),
+            'file_ext'  => $file->guessExtension()
+        ];
+
+        $file->move(FCPATH . 'uploads/', $file_info['raw_name'] . '.' . $file_info['file_ext'], true);
+
+        return ($file_info);
+    }
+
+    /**
+     * Saves general configuration. Used in app/Views/configs/general_config.php
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveGeneral(): ResponseInterface
+    {
+        $rules = [
+            'theme' => 'permit_empty|themeExists',
+        ];
+        if (!$this->validate($rules)) {
+            $errors = $this->validator->getErrors();
+            return $this->response->setJSON(['success' => false, 'message' => reset($errors)]);
+        }
+
+        $batchSaveData = [
+            'theme'                             => $this->request->getPost('theme'),
+            'login_form'                        => $this->request->getPost('login_form'),
+            'default_sales_discount_type'       => $this->request->getPost('default_sales_discount_type') != null,
+            'default_sales_discount'            => parse_decimals($this->request->getPost('default_sales_discount')),
+            'default_receivings_discount_type'  => $this->request->getPost('default_receivings_discount_type') != null,
+            'default_receivings_discount'       => parse_decimals($this->request->getPost('default_receivings_discount')),
+            'enforce_privacy'                   => $this->request->getPost('enforce_privacy') != null,
+            'receiving_calculate_average_price' => $this->request->getPost('receiving_calculate_average_price') != null,
+            'lines_per_page'                    => $this->request->getPost('lines_per_page', FILTER_SANITIZE_NUMBER_INT),
+            'notify_horizontal_position'        => $this->request->getPost('notify_horizontal_position'),
+            'notify_vertical_position'          => $this->request->getPost('notify_vertical_position'),
+            'image_max_width'                   => $this->request->getPost('image_max_width', FILTER_SANITIZE_NUMBER_INT),
+            'image_max_height'                  => $this->request->getPost('image_max_height', FILTER_SANITIZE_NUMBER_INT),
+            'image_max_size'                    => $this->request->getPost('image_max_size', FILTER_SANITIZE_NUMBER_INT),
+            'image_allowed_types'               => implode(',', $this->request->getPost('image_allowed_types')),
+            'gcaptcha_enable'                   => $this->request->getPost('gcaptcha_enable') != null,
+            'gcaptcha_secret_key'               => $this->request->getPost('gcaptcha_secret_key'),
+            'gcaptcha_site_key'                 => $this->request->getPost('gcaptcha_site_key'),
+            'suggestions_first_column'          => $this->validateSuggestionsColumn($this->request->getPost('suggestions_first_column'), 'first'),
+            'suggestions_second_column'         => $this->validateSuggestionsColumn($this->request->getPost('suggestions_second_column'), 'other'),
+            'suggestions_third_column'          => $this->validateSuggestionsColumn($this->request->getPost('suggestions_third_column'), 'other'),
+            'giftcard_number'                   => $this->request->getPost('giftcard_number'),
+            'derive_sale_quantity'              => $this->request->getPost('derive_sale_quantity') != null,
+            'multi_pack_enabled'                => $this->request->getPost('multi_pack_enabled') != null,
+            'include_hsn'                       => $this->request->getPost('include_hsn') != null,
+            'category_dropdown'                 => $this->request->getPost('category_dropdown') != null
+        ];
+
+        $this->module->set_show_office_group($this->request->getPost('show_office_group') != null);
+
+        $this->db->transStart();
+
+        $attributeSuccess = true;
+        if ($batchSaveData['category_dropdown']) {
+            $definitionData['definition_name'] = 'ospos_category';
+            $definitionData['definition_flags'] = 0;
+            $definitionData['definition_type'] = 'DROPDOWN';
+            $definitionData['definition_id'] = CATEGORY_DEFINITION_ID;
+            $definitionData['deleted'] = 0;
+
+            $attributeSuccess = $this->attribute->saveDefinition($definitionData, CATEGORY_DEFINITION_ID);
+        } elseif ($batchSaveData['category_dropdown'] == NO_DEFINITION_ID) {
+            $attributeSuccess = $this->attribute->deleteDefinition(CATEGORY_DEFINITION_ID);
+        }
+
+        $success = $attributeSuccess && $this->appconfig->batch_save($batchSaveData);
+
+        $this->db->transComplete();
+
+        $success = $success && $this->db->transStatus();
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Checks a number against the currently selected locale. Used in app/Views/configs/locale_config.php
+     *
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postCheckNumberLocale(): ResponseInterface
+    {
+        $numberLocale = $this->request->getPost('number_locale');
+        $saveNumberLocale = $this->request->getPost('save_number_locale');
+        $postedCurrencySymbol = $this->request->getPost('currency_symbol');
+        $postedCurrencyCode = $this->request->getPost('currency_code');
+
+        $fmt = new NumberFormatter($numberLocale, NumberFormatter::CURRENCY);
+
+        // Use posted values if provided, otherwise fall back to locale defaults
+        $currencySymbol = $postedCurrencySymbol !== '' ? $postedCurrencySymbol : $fmt->getSymbol(NumberFormatter::CURRENCY_SYMBOL);
+        $currencyCode = $postedCurrencyCode !== '' ? $postedCurrencyCode : $fmt->getTextAttribute(NumberFormatter::CURRENCY_CODE);
+
+        // Update saved locale if it changed
+        if ($numberLocale !== $saveNumberLocale) {
+            $saveNumberLocale = $numberLocale;
+        }
+
+        if ($this->request->getPost('thousands_separator') == 'false') {
+            $fmt->setTextAttribute(NumberFormatter::GROUPING_SEPARATOR_SYMBOL, '');
+        }
+
+        $fmt->setSymbol(NumberFormatter::CURRENCY_SYMBOL, $currencySymbol);
+        $numberLocaleExample = $fmt->format(1234567890.12300);
+
+        return $this->response->setJSON([
+            'success'               => $numberLocaleExample != false,
+            'save_number_locale'    => $saveNumberLocale,
+            'number_locale_example' => $numberLocaleExample,
+            'currency_symbol'       => $currencySymbol,
+            'currency_code'         => $currencyCode,
+        ]);
+    }
+
+    /**
+     * Saves locale configuration. Used in app/Views/configs/locale_config.php
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveLocale(): ResponseInterface
+    {
+        $rules = [
+            'payment_reference_code_min' => 'required|integer|greater_than[0]',
+            'payment_reference_code_max' => 'required|integer',
+        ];
+
+        if (!$this->validate($rules)) {
+            $errors = $this->validator->getErrors();
+
+            return $this->response->setJSON([
+                'success' => false,
+                'message' => reset($errors)
+            ]);
+        }
+
+        if (!$this->validatePaymentReferenceCodeRange()) {
+            return $this->response->setJSON([
+                'success' => false,
+                'message' => 'The payment_reference_code_max field must contain a number greater than or equal to payment_reference_code_min.'
+            ]);
+        }
+
+
+        $exploded = explode(":", $this->request->getPost('language'));
+        $currency_symbol = $this->request->getPost('currency_symbol');
+        $batch_save_data = [
+            'currency_symbol'            => htmlspecialchars($currency_symbol ?? ''),
+            'currency_code'              => $this->request->getPost('currency_code'),
+            'language_code'              => $exploded[0],
+            'language'                   => $exploded[1],
+            'timezone'                   => $this->request->getPost('timezone'),
+            'dateformat'                 => $this->request->getPost('dateformat'),
+            'timeformat'                 => $this->request->getPost('timeformat'),
+            'thousands_separator'        => $this->request->getPost('thousands_separator') != null,
+            'number_locale'              => $this->request->getPost('number_locale'),
+            'currency_decimals'          => $this->request->getPost('currency_decimals', FILTER_SANITIZE_NUMBER_INT),
+            'tax_decimals'               => $this->request->getPost('tax_decimals', FILTER_SANITIZE_NUMBER_INT),
+            'quantity_decimals'          => $this->request->getPost('quantity_decimals', FILTER_SANITIZE_NUMBER_INT),
+            'country_codes'              => htmlspecialchars($this->request->getPost('country_codes')),
+            'payment_options_order'      => $this->request->getPost('payment_options_order'),
+            'payment_reference_code_min' => $this->request->getPost('payment_reference_code_min', FILTER_SANITIZE_NUMBER_INT),
+            'payment_reference_code_max' => $this->request->getPost('payment_reference_code_max', FILTER_SANITIZE_NUMBER_INT),
+            'date_or_time_format'        => $this->request->getPost('date_or_time_format') != null,
+            'cash_decimals'              => $this->request->getPost('cash_decimals', FILTER_SANITIZE_NUMBER_INT),
+            'cash_rounding_code'         => $this->request->getPost('cash_rounding_code'),
+            'financial_year'             => $this->request->getPost('financial_year', FILTER_SANITIZE_NUMBER_INT)
+        ];
+
+        $success = $this->appconfig->batch_save($batch_save_data);
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Saves email configuration. Used in app/Views/configs/email_config.php
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveEmail(): ResponseInterface
+    {
+        $password = '';
+
+        if (checkEncryption() && !empty($this->request->getPost('smtp_pass'))) {
+            $password = $this->encrypter->encrypt($this->request->getPost('smtp_pass'));
+        }
+
+        $protocol = $this->request->getPost('protocol');
+        $mailpath = $this->request->getPost('mailpath');
+
+        $rules = [
+            'mailpath' => [
+                'label' => lang('Config.email_mailpath'),
+                'rules' => ($protocol === 'sendmail' ? 'required' : 'permit_empty') . '|valid_path_strict'
+            ]
+        ];
+        $messages = [
+            'mailpath' => [
+                'required'          => lang('Config.mailpath_invalid'),
+                'valid_path_strict' => lang('Config.mailpath_invalid')
+            ]
+        ];
+
+        if ($error = $this->validateFields($rules, $messages)) {
+            return $error;
+        }
+
+        $batch_save_data = [
+            'protocol'     => $protocol,
+            'mailpath'     => $mailpath,
+            'smtp_host'    => $this->request->getPost('smtp_host'),
+            'smtp_user'    => $this->request->getPost('smtp_user'),
+            'smtp_pass'    => $password,
+            'smtp_port'    => $this->request->getPost('smtp_port', FILTER_SANITIZE_NUMBER_INT),
+            'smtp_timeout' => $this->request->getPost('smtp_timeout', FILTER_SANITIZE_NUMBER_INT),
+            'smtp_crypto'  => $this->request->getPost('smtp_crypto')
+        ];
+
+        $success = $this->appconfig->batch_save($batch_save_data);
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Saves SMS message configuration. Used in app/Views/configs/message_config.php.
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveMessage(): ResponseInterface
+    {
+        $password = '';
+
+        if (checkEncryption() && !empty($this->request->getPost('msg_pwd'))) {
+            $password = $this->encrypter->encrypt($this->request->getPost('msg_pwd'));
+        }
+
+        $batch_save_data = [
+            'msg_msg' => $this->request->getPost('msg_msg'),
+            'msg_uid' => $this->request->getPost('msg_uid'),
+            'msg_pwd' => $password,
+            'msg_src' => $this->request->getPost('msg_src')
+        ];
+
+        $success = $this->appconfig->batch_save($batch_save_data);
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * This function fetches all the available lists from Mailchimp for the given API key
+     */
+    private function _mailchimp(string $api_key = ''): array    // TODO: Hungarian notation
+    {
+        $mailchimp_lib = new Mailchimp_lib(['api_key' => $api_key]);
+
+        $result = [];
+
+        $lists = $mailchimp_lib->getLists();
+        if ($lists !== false) {
+            if (is_array($lists) && !empty($lists['lists']) && is_array($lists['lists'])) {
+                foreach ($lists['lists'] as $list) {
+                    $result[$list['id']] = $list['name'] . ' [' . $list['stats']['member_count'] . ']';
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Gets Mailchimp lists when a valid API key is inserted. Used in app/Views/configs/integrations_config.php
+     *
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postCheckMailchimpApiKey(): ResponseInterface
+    {
+        $lists = $this->_mailchimp($this->request->getPost('mailchimp_api_key'));
+        $success = count($lists) > 0;
+
+        return $this->response->setJSON([
+            'success'         => $success,
+            'message'         => lang('Config.mailchimp_key_' . ($success ? '' : 'un') . 'successfully'),
+            'mailchimp_lists' => $lists
+        ]);
+    }
+
+    /**
+     * Saves Mailchimp configuration. Used in app/Views/configs/integrations_config.php
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveMailchimp(): ResponseInterface
+    {
+        $api_key = '';
+        $list_id = '';
+
+        if (checkEncryption()) {
+            $api_key_unencrypted = $this->request->getPost('mailchimp_api_key');
+            if (!empty($api_key_unencrypted)) {
+                $api_key = $this->encrypter->encrypt($api_key_unencrypted);
+            }
+
+            $list_id_unencrypted = $this->request->getPost('mailchimp_list_id');
+            if (!empty($list_id_unencrypted)) {
+                $list_id = $this->encrypter->encrypt($list_id_unencrypted);
+            }
+        }
+
+        $batch_save_data = ['mailchimp_api_key' => $api_key, 'mailchimp_list_id' => $list_id];
+
+        $success = $this->appconfig->batch_save($batch_save_data);
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Gets all stock locations. Used in app/Views/configs/stock_config.php
+     *
+     * @return string
+     * @noinspection PhpUnused
+     */
+    public function getStockLocations(): string
+    {
+        $stock_locations = $this->stock_location->get_all()->getResultArray();
+
+        return view('partial/stock_locations', ['stock_locations' => $stock_locations]);
+    }
+
+    /**
+     * @return string
+     */
+    public function getDinnerTables(): string
+    {
+        $dinner_tables = $this->dinner_table->get_all()->getResultArray();
+
+        return view('partial/dinner_tables', ['dinner_tables' => $dinner_tables]);
+    }
+
+
+    /**
+     * Gets all tax categories.
+     *
+     * @return string
+     */
+    public function ajax_tax_categories(): string    // TODO: Is this function called anywhere in the code?
+    {
+        $tax_categories = $this->tax->get_all_tax_categories()->getResultArray();
+
+        return view('partial/tax_categories', ['tax_categories' => $tax_categories]);
+    }
+
+    /**
+     * Gets all customer rewards. Used in app/Views/configs/reward_config.php
+     *
+     * @return string
+     * @noinspection PhpUnused
+     */
+    public function getCustomerRewards(): string
+    {
+        $customer_rewards = $this->customer_rewards->get_all()->getResultArray();
+
+        return view('partial/customer_rewards', ['customer_rewards' => $customer_rewards]);
+    }
+
+    /**
+     * @return void
+     */
+    private function _clear_session_state(): void    // TODO: Hungarian notation
+    {
+        $this->sale_lib->clear_sale_location();
+        $this->sale_lib->clear_table();
+        $this->sale_lib->clear_all();
+        $this->receiving_lib = new Receiving_lib();
+        $this->receiving_lib->clear_stock_source();
+        $this->receiving_lib->clear_stock_destination();
+        $this->receiving_lib->clear_all();
+    }
+
+    /**
+     * Saves stock locations. Used in app/Views/configs/stock_config.php
+     *
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveLocations(): ResponseInterface
+    {
+        $this->db->transStart();
+
+        $not_to_delete = [];
+        foreach ($this->request->getPost() as $key => $value) {
+            if (str_contains($key, 'stock_location')) {
+                // Save or update
+                foreach ($value as $location_id => $location_name) {
+                    $location_data = ['location_name' => $location_name];
+                    if ($this->stock_location->save_value($location_data, $location_id)) {
+                        $location_id = $this->stock_location->get_location_id($location_name);
+                        $not_to_delete[] = $location_id;
+                        $this->_clear_session_state();
+                    }
+                }
+            }
+        }
+
+        // All locations not available in post will be deleted now
+        $deleted_locations = $this->stock_location->get_all()->getResultArray();
+
+        foreach ($deleted_locations as $location => $location_data) {
+            if (!in_array($location_data['location_id'], $not_to_delete)) {
+                $this->stock_location->delete($location_data['location_id']);
+            }
+        }
+
+        $this->db->transComplete();
+
+        $success = $this->db->transStatus();
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Saves all dinner tables. Used in app/Views/configs/table_config.php
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveTables(): ResponseInterface
+    {
+        $this->db->transStart();
+
+        $dinner_table_enable = $this->request->getPost('dinner_table_enable') != null;
+
+        $this->appconfig->save(['dinner_table_enable' => $dinner_table_enable]);
+
+        if ($dinner_table_enable) {
+            $not_to_delete = [];
+            foreach ($this->request->getPost() as $key => $value) {    // TODO: Not sure if this is the best way to filter the array
+                if (strstr($key, 'dinner_table') && $key != 'dinner_table_enable') {
+                    $dinner_table_id = preg_replace("/.*?_(\d+)$/", "$1", $key);
+                    $not_to_delete[] = $dinner_table_id;
+
+                    // Save or update
+                    $table_data = ['name' => $value];
+                    if ($this->dinner_table->save_value($table_data, $dinner_table_id)) {
+                        $this->_clear_session_state();    // TODO: Remove hungarian notation.
+                    }
+                }
+            }
+
+            // All tables not available in post will be deleted now
+            $deleted_tables = $this->dinner_table->get_all()->getResultArray();
+
+            foreach ($deleted_tables as $dinner_tables => $table) {
+                if (!in_array($table['dinner_table_id'], $not_to_delete)) {
+                    $this->dinner_table->delete($table['dinner_table_id']);
+                }
+            }
+        }
+
+        $this->db->transComplete();
+
+        $success = $this->db->transStatus();
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Saves tax configuration. Used in app/Views/configs/tax_config.php
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveTax(): ResponseInterface
+    {
+        $default_tax_1_rate = $this->request->getPost('default_tax_1_rate');
+        $default_tax_2_rate = $this->request->getPost('default_tax_2_rate');
+
+        $batch_save_data = [
+            'default_tax_1_rate'        => parse_tax(filter_var($default_tax_1_rate, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION)),
+            'default_tax_1_name'        => $this->request->getPost('default_tax_1_name'),
+            'default_tax_2_rate'        => parse_tax(filter_var($default_tax_2_rate, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION)),
+            'default_tax_2_name'        => $this->request->getPost('default_tax_2_name'),
+            'tax_included'              => $this->request->getPost('tax_included') != null,
+            'use_destination_based_tax' => $this->request->getPost('use_destination_based_tax') != null,
+            'default_tax_code'          => $this->request->getPost('default_tax_code'),
+            'default_tax_category'      => $this->request->getPost('default_tax_category'),
+            'default_tax_jurisdiction'  => $this->request->getPost('default_tax_jurisdiction'),
+            'tax_id'                    => $this->request->getPost('tax_id', FILTER_SANITIZE_NUMBER_INT)
+        ];
+
+        $success = $this->appconfig->batch_save($batch_save_data);
+
+        $message = lang('Config.saved_' . ($success ? '' : 'un') . 'successfully');
+
+        return $this->response->setJSON(['success' => $success, 'message' => $message]);
+    }
+
+    /**
+     * Saves customer rewards configuration. Used in app/Views/configs/reward_config.php
+     *
+      * @throws ReflectionException
+      * @return ResponseInterface
+      * @noinspection PhpUnused
+      */
+    public function postSaveRewards(): ResponseInterface
+    {
+        $this->db->transStart();
+
+        $customer_reward_enable = $this->request->getPost('customer_reward_enable') != null;
+
+        $this->appconfig->save(['customer_reward_enable' => $customer_reward_enable]);
+
+        if ($customer_reward_enable) {
+            $not_to_delete = [];
+            $array_save = [];
+            foreach ($this->request->getPost() as $key => $value) {
+                if (strstr($key, 'customer_reward') && $key != 'customer_reward_enable') {
+                    $customer_reward_id = preg_replace("/.*?_(\d+)$/", "$1", $key);
+                    $not_to_delete[] = $customer_reward_id;
+                    $array_save[$customer_reward_id]['package_name'] = $value;
+                } elseif (str_contains($key, 'reward_points')) {
+                    $customer_reward_id = preg_replace("/.*?_(\d+)$/", "$1", $key);
+                    $array_save[$customer_reward_id]['points_percent'] = $value;
+                }
+            }
+
+            if (!empty($array_save)) {
+                foreach ($array_save as $key => $value) {
+                    // Save or update
+                    $package_data = ['package_name' => $value['package_name'], 'points_percent' => $value['points_percent']];
+                    $this->customer_rewards->save_value($package_data, $key);    // TODO: reflection exception
+                }
+            }
+
+            // All packages not available in post will be deleted now
+            $deleted_packages = $this->customer_rewards->get_all()->getResultArray();
+
+            foreach ($deleted_packages as $customer_rewards => $reward_category) {
+                if (!in_array($reward_category['package_id'], $not_to_delete)) {
+                    $this->customer_rewards->delete($reward_category['package_id']);
+                }
+            }
+        }
+
+        $this->db->transComplete();
+
+        $success = $this->db->transStatus();
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Saves barcode configuration. Used in app/Views/configs/barcode_config.php
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveBarcode(): ResponseInterface
+    {
+        $batch_save_data = [
+            'barcode_type'              => $this->request->getPost('barcode_type'),
+            'barcode_width'             => $this->request->getPost('barcode_width', FILTER_SANITIZE_NUMBER_INT),
+            'barcode_height'            => $this->request->getPost('barcode_height', FILTER_SANITIZE_NUMBER_INT),
+            'barcode_font'              => $this->request->getPost('barcode_font'),
+            'barcode_font_size'         => $this->request->getPost('barcode_font_size', FILTER_SANITIZE_NUMBER_INT),
+            'barcode_first_row'         => $this->request->getPost('barcode_first_row'),
+            'barcode_second_row'        => $this->request->getPost('barcode_second_row'),
+            'barcode_third_row'         => $this->request->getPost('barcode_third_row'),
+            'barcode_num_in_row'        => $this->request->getPost('barcode_num_in_row', FILTER_SANITIZE_NUMBER_INT),
+            'barcode_page_width'        => $this->request->getPost('barcode_page_width', FILTER_SANITIZE_NUMBER_INT),
+            'barcode_page_cellspacing'  => $this->request->getPost('barcode_page_cellspacing', FILTER_SANITIZE_NUMBER_INT),
+            'barcode_generate_if_empty' => $this->request->getPost('barcode_generate_if_empty') != null,
+            'allow_duplicate_barcodes'  => $this->request->getPost('allow_duplicate_barcodes') != null,
+            'barcode_content'           => $this->request->getPost('barcode_content'),
+            'barcode_formats'           => json_encode($this->request->getPost('barcode_formats'))
+        ];
+
+        $success = $this->appconfig->batch_save($batch_save_data);
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Saves receipt configuration. Used in app/Views/configs/receipt_config.php.
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveReceipt(): ResponseInterface
+    {
+        $batch_save_data = [
+            'receipt_template'              => Sale_lib::isValidReceiptTemplate($this->request->getPost('receipt_template'))
+                ? $this->request->getPost('receipt_template')
+                : 'receipt_default',
+            'receipt_font_size'             => $this->request->getPost('receipt_font_size', FILTER_SANITIZE_NUMBER_INT),
+            'print_delay_autoreturn'        => $this->request->getPost('print_delay_autoreturn', FILTER_SANITIZE_NUMBER_INT),
+            'email_receipt_check_behaviour' => $this->request->getPost('email_receipt_check_behaviour'),
+            'print_receipt_check_behaviour' => $this->request->getPost('print_receipt_check_behaviour'),
+            'receipt_show_company_name'     => $this->request->getPost('receipt_show_company_name') != null,
+            'receipt_show_taxes'            => $this->request->getPost('receipt_show_taxes') != null,
+            'receipt_show_tax_ind'          => $this->request->getPost('receipt_show_tax_ind') != null,
+            'receipt_show_total_discount'   => $this->request->getPost('receipt_show_total_discount') != null,
+            'receipt_show_description'      => $this->request->getPost('receipt_show_description') != null,
+            'receipt_show_serialnumber'     => $this->request->getPost('receipt_show_serialnumber') != null,
+            'print_silently'                => $this->request->getPost('print_silently') != null,
+            'print_header'                  => $this->request->getPost('print_header') != null,
+            'print_footer'                  => $this->request->getPost('print_footer') != null,
+            'print_top_margin'              => $this->request->getPost('print_top_margin', FILTER_SANITIZE_NUMBER_INT),
+            'print_left_margin'             => $this->request->getPost('print_left_margin', FILTER_SANITIZE_NUMBER_INT),
+            'print_bottom_margin'           => $this->request->getPost('print_bottom_margin', FILTER_SANITIZE_NUMBER_INT),
+            'print_right_margin'            => $this->request->getPost('print_right_margin', FILTER_SANITIZE_NUMBER_INT)
+        ];
+
+        $success = $this->appconfig->batch_save($batch_save_data);
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Saves keyboard shortcut bindings.
+     *
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveShortcuts(): ResponseInterface
+    {
+        $allowedShortcuts = array_keys($this->sale_lib->getKeyShortcutsOptions());
+        $currentShortcuts = $this->sale_lib->getKeyShortcuts();
+        $batchSaveData = [];
+
+        foreach ($currentShortcuts as $name => $shortcut) {
+            $postedValue = trim((string)$this->request->getPost('key_' . $name));
+
+            if (!in_array($postedValue, $allowedShortcuts, true)) {
+                $postedValue = $shortcut['value'];
+            }
+
+            $batchSaveData['key_' . $name] = $postedValue;
+        }
+
+        $duplicateValues = array_filter(array_count_values($batchSaveData), static fn(int $count): bool => $count > 1);
+        if (!empty($duplicateValues)) {
+            return $this->response->setJSON([
+                'success' => false,
+                'message' => lang('Config.shortcuts_duplicate_bindings')
+            ]);
+        }
+
+        $success = $this->appconfig->batch_save($batchSaveData);
+
+        return $this->response->setJSON([
+            'success' => $success,
+            'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')
+        ]);
+    }
+
+    /**
+     * Saves invoice configuration. Used in app/Views/configs/invoice_config.php.
+     *
+     * @throws ReflectionException
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveInvoice(): ResponseInterface
+    {
+        $batch_save_data = [
+            'invoice_enable'              => $this->request->getPost('invoice_enable') != null,
+            'sales_invoice_format'        => $this->request->getPost('sales_invoice_format'),
+            'sales_quote_format'          => $this->request->getPost('sales_quote_format'),
+            'recv_invoice_format'         => $this->request->getPost('recv_invoice_format'),
+            'invoice_default_comments'    => $this->request->getPost('invoice_default_comments'),
+            'invoice_email_message'       => $this->request->getPost('invoice_email_message'),
+            'line_sequence'               => $this->request->getPost('line_sequence'),
+            'last_used_invoice_number'    => $this->request->getPost('last_used_invoice_number', FILTER_SANITIZE_NUMBER_INT),
+            'last_used_quote_number'      => $this->request->getPost('last_used_quote_number', FILTER_SANITIZE_NUMBER_INT),
+            'quote_default_comments'      => $this->request->getPost('quote_default_comments'),
+            'work_order_enable'           => $this->request->getPost('work_order_enable') != null,
+            'work_order_format'           => $this->request->getPost('work_order_format'),
+            'last_used_work_order_number' => $this->request->getPost('last_used_work_order_number', FILTER_SANITIZE_NUMBER_INT),
+            'invoice_type'                => Sale_lib::isValidInvoiceType($this->request->getPost('invoice_type'))
+                ? $this->request->getPost('invoice_type')
+                : 'invoice'
+        ];
+
+        $success = $this->appconfig->batch_save($batch_save_data);
+
+        // Update the register mode with the latest change so that if the user
+        // switches immediately back to the register the mode reflects the change
+        if ($success) {
+            if ($this->config['invoice_enable']) {
+                $this->sale_lib->set_mode($this->config['default_register_mode']);
+            } else {
+                $this->sale_lib->set_mode('sale');
+            }
+        }
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Removes the company logo from the database. Used in app/Views/configs/info_config.php.
+     *
+     * @return ResponseInterface
+     * @throws ReflectionException
+     * @noinspection PhpUnused
+     */
+    public function postRemoveLogo(): ResponseInterface
+    {
+        $success = $this->appconfig->save(['company_logo' => '']);
+
+        return $this->response->setJSON(['success' => $success]);
+    }
+
+    /**
+     * Validates suggestions column configuration to prevent SQL injection.
+     *
+     * @param mixed $column The column value from POST
+     * @param string $fieldType Either 'first' or 'other' to determine default fallback
+     * @return string Validated column name
+     */
+    private function validateSuggestionsColumn(mixed $column, string $fieldType): string
+    {
+        if (!is_string($column)) {
+            return $fieldType === 'first' ? 'name' : '';
+        }
+
+        $allowed = $fieldType === 'first'
+            ? Item::ALLOWED_SUGGESTIONS_COLUMNS
+            : Item::ALLOWED_SUGGESTIONS_COLUMNS_WITH_EMPTY;
+
+        $fallback = $fieldType === 'first' ? 'name' : '';
+
+        return in_array($column, $allowed, true) ? $column : $fallback;
+    }
+
+    /**
+     * Validates that payment reference code max is greater than or equal to min.
+     *
+     * @return bool
+     */
+    private function validatePaymentReferenceCodeRange(): bool
+    {
+        $min = (int) $this->request->getPost('payment_reference_code_min');
+        $max = (int) $this->request->getPost('payment_reference_code_max');
+
+        return $max >= $min;
+    }
+}

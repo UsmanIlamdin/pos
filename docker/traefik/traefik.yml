@@ -1,0 +1,47 @@
+# Traefik v3 Static Configuration
+# This file is read once at startup.
+
+api:
+  dashboard: true   # Enable dashboard at http://localhost:TRAEFIK_DASHBOARD_PORT
+  insecure: true    # Local-only; no auth required
+
+log:
+  level: INFO
+
+accessLog:
+  filePath: "/var/log/traefik/access.log"
+  bufferingSize: 100
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+    http:
+      tls: {}
+
+  mariadb:
+    address: ":3306"
+
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false   # Only expose containers with traefik.enable=true label
+    network: "pos_net"
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/cert.pem
+        keyFile: /etc/traefik/certs/key.pem

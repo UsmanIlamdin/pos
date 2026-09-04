@@ -1,0 +1,25 @@
+include:
+    - docker/docker-mysql.yml
+
+services:
+    ospos:
+        image: jekkos/opensourcepos:master
+        restart: always
+        depends_on:
+            - mysql
+        ports:
+            - "80:80"
+        networks:
+            - app_net
+        volumes:
+            - uploads:/app/public/uploads
+            - logs:/app/writable/logs
+        environment:
+            - CI_ENVIRONMENT=production
+            - ALLOWED_HOSTNAMES=localhost
+            - FORCE_HTTPS=false
+            - PHP_TIMEZONE=UTC
+            - MYSQL_USERNAME=admin
+            - MYSQL_PASSWORD=pointofsale
+            - MYSQL_DB_NAME=ospos
+            - MYSQL_HOST_NAME=mysql

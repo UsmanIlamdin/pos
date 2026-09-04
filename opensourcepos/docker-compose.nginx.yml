@@ -1,0 +1,36 @@
+
+include:
+  - docker-compose.phpmyadmin.yml
+
+services:
+    nginx:
+        image: nginx:1.19-alpine
+        container_name: nginx
+        restart: always
+        depends_on:
+            - ospos
+            - certbot
+        volumes:
+            - ./docker/data/nginx/nginx.tmpl:/etc/nginx/nginx.tmpl:ro
+            - ./docker/data/nginx/error_log.log:/etc/nginx/error_log.log
+            - ./docker/data/certbot/conf:/etc/letsencrypt:ro
+            - ./docker/data/certbot/www:/var/www/certbot:ro
+        ports:
+            - "443:443"
+        networks:
+            - app_net
+        environment:
+            - WEB_DOMAIN=${OSPOS_DOMAIN_NAME}
+            - ESC=$$
+        command: "/bin/sh -c 'envsubst < /etc/nginx/nginx.tmpl > /etc/nginx/nginx.conf & while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g \"daemon off;\"'"
+
+    certbot:
+        image: certbot/certbot
+        container_name: certbot
+        restart: always
+        volumes:
+            - ./docker/data/certbot/conf:/etc/letsencrypt
+            - ./docker/data/certbot/www:/var/www/certbot
+        networks:
+            - app_net
+        entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"

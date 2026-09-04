@@ -1,0 +1,128 @@
+<?php
+/**
+ * @var array $tax_categories
+ */
+?>
+
+<?= form_open('taxes/save_tax_categories/', ['id' => 'tax_categories_form', 'class' => 'form-horizontal']) ?>
+    <div id="config_wrapper">
+        <fieldset id="config_info">
+
+            <div id="required_fields_message"><?= lang('Common.fields_required_message') ?></div>
+            <ul id="tax_categories_error_message_box" class="error_message_box"></ul>
+
+            <div id="tax_categories">
+                <?= view('partial/tax_categories') ?>
+            </div>
+
+            <?= form_submit([
+                'name'  => 'submit_tax_categories',
+                'id'    => 'submit_tax_categories',
+                'value' => lang('Common.submit'),
+                'class' => 'btn btn-primary btn-sm pull-right'
+            ]) ?>
+
+        </fieldset>
+    </div>
+<?= form_close() ?>
+
+<script type="text/javascript">
+    // Validation and Submit Handling
+    $(document).ready(function() {
+        let tax_categories_count = <?= sizeof($tax_categories) ?>;
+        if (tax_categories_count == 0) {
+            tax_categories_count = 1;
+        }
+
+        const hide_show_remove_tax_category = function() {
+            if ($("input[name*='tax_category']:enabled").length > 1) {
+                $(".remove_tax_category").show();
+            } else {
+                $(".remove_tax_category").hide();
+            }
+        };
+
+        const add_tax_category = function() {
+            let id = $(this).parent().find('input').attr('id');
+            id = id.replace(/.*?_(\d+)$/g, "$1");
+
+            const previous_tax_category_id = 'tax_category_' + id;
+            const block = $(this).parent().clone(true);
+            const new_block = block.insertAfter($(this).parent());
+            ++tax_categories_count;
+            const new_tax_category_id = 'tax_category_' + tax_categories_count;
+
+            $(new_block).find('label').html("<?= lang('Taxes.tax_category') ?> " + tax_categories_count).attr('for', new_tax_category_id).attr('class', 'control-label col-xs-2');
+            $(new_block).find("input[name='tax_category[]']").attr('id', new_tax_category_id).removeAttr('disabled').attr('class', 'form-control input-sm required').val('');
+            $(new_block).find("input[name='tax_group_sequence[]']").removeAttr('disabled').attr('class', 'form-control input-sm').val('');
+            $(new_block).find("input[name='tax_category_id[]']").val('-1');
+            hide_show_remove_tax_category();
+        };
+
+        const remove_tax_category = function() {
+            $(this).parent().remove();
+            hide_show_remove_tax_category();
+        };
+
+        const init_add_remove_tax_categories = function() {
+            $('.add_tax_category').click(add_tax_category);
+            $('.remove_tax_category').click(remove_tax_category);
+            hide_show_remove_tax_category();
+        };
+        init_add_remove_tax_categories();
+
+        let duplicate_found = false;
+
+        // Run validator once for all fields
+        $.validator.addMethod("check4TaxCategoryDups", function(value, element) {
+            let value_count = 0;
+            $('input[name="tax_category[]"]').each(function() {
+                value_count = $(this).val() == value ? value_count + 1 : value_count;
+            });
+            return value_count <= 1;
+
+        }, "<?= lang('Taxes.tax_category_duplicate') ?>");
+
+        $.validator.addMethod('validateTaxCategoryCharacters', function(value, element) {
+            return (value.indexOf('_') == -1);
+
+        }, "<?= lang('Taxes.tax_category_invalid_chars') ?>");
+
+        $.validator.addMethod('requireTaxCategory', function(value, element) {
+            return value.trim() != '';
+
+        }, "<?= lang('Taxes.tax_category_required') ?>");
+
+        $('#tax_categories_form').validate($.extend(form_support.handler, {
+            submitHandler: function(form) {
+                $(form).ajaxSubmit({
+                    success: function(response) {
+                        $.notify({
+                            message: response.message
+                        }, {
+                            type: response.success ? 'success' : 'danger'
+                        });
+                        $("#tax_categories").load('<?= esc("taxes/ajax_tax_categories") ?>', init_add_remove_tax_categories);
+                    },
+                    dataType: 'json'
+                });
+            },
+            invalidHandler: function(event, validator) {
+                $.notify("<?= lang('Common.correct_errors') ?>");
+            },
+            errorLabelContainer: "#tax_category_error_message_box"
+        }));
+
+        <?php
+            $i = 0;
+            foreach ($tax_categories as $tax_category => $tax_category_data) {
+        ?>
+            $('<?= '#tax_category_' . ++$i ?>').rules("add", {
+                requireTaxCategory: true,
+                check4TaxCategoryDups: true,
+                validateTaxCategoryCharacters: true
+            });
+        <?php } ?>
+
+    });
+</script>
