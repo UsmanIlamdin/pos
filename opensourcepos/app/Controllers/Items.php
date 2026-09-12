@@ -135,6 +135,10 @@ class Items extends Secure_Controller
         // Check if any filter is set in the multiselect dropdown
         $request_filters = array_fill_keys($this->request->getGet('filters', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?? [], true);
         $filters = array_merge($filters, $request_filters);
+
+        $filter_param = $this->request->getGet('filter');
+        $filters['column_filters'] = $filter_param ? json_decode($filter_param, true) : [];
+
         $items = $this->item->search($search, $filters, $limit, $offset, $sort, $order);
         $total_rows = $this->item->get_found_rows($search, $filters);
         $data_rows = [];

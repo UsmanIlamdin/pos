@@ -123,15 +123,13 @@ NOTE: If you're running non-release code, please make sure you always run the la
 - If you have suhosin installed and face an issue with CSRF, please make sure you read [issue #1492](https://github.com/opensourcepos/opensourcepos/issues/1492).
 
 - PHP `≥ 8.2` is required to run this app.
+- Rebuild command is required after every pull from the repository. Please read [INSTALL.md](INSTALL.md) for more information.
+```bash
 
-## 🏃 Keep the Machine Running
+usman@usmanilamdin:~/Sites/pos/opensourcepos$ docker run --rm -v $(pwd):/app -w /app node:18 /bin/bash -c "npm install && npm run gulp"
 
-If you like our project, please consider buying us a coffee through the button below so we can keep adding features. Please star the project if you like it!
 
-[![Donate](https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=MUN6AEG7NY6H8)\
-Or refer to the [FUNDING.yml](.github/FUNDING.yml) file.
-
-If you choose to deploy OSPOS in the cloud, you can contribute to the project by using DigitalOcean and signing up through our referral link. You'll receive a [free $200, 60-day credit](https://m.do.co/c/ac38c262507b) if you run OSPOS in a DigitalOcean droplet through [our referral link](https://m.do.co/c/ac38c262507b).
+```
 
 ## 📄 License
 
@@ -155,9 +153,3 @@ In short, you are free to use the application, but you cannot claim any property
 
 Any person or company found breaching the license agreement might find a bunch of monkeys at the door ready to destroy their servers.
 
-## 🙏 Credits
-
-| <div align="center">DigitalOcean</div> | <div align="center">JetBrains</div> | <div align="center">GitHub</div> |
-| --- | --- | --- |
-| <div align="center"><a href="https://www.digitalocean.com?utm_medium=opensource&utm_source=opensourcepos" target="_blank"><img src="https://github.com/user-attachments/assets/fbbf7433-ed35-407d-8946-fd03d236d350" alt="DigitalOcean Logo" height="50"></a></div> | <div align="center"><a href="https://www.jetbrains.com/idea/" target="_blank"><img src="https://github.com/opensourcepos/opensourcepos/assets/12870258/187f9bbe-4484-475c-9b58-5e5d5f931f09" alt="IntelliJ IDEA Logo" height="50"></a></div> | <div align="center"><a href="https://github.com/features/actions" target="_blank"><img src="https://github.githubassets.com/images/modules/site/icons/eyebrow-panel/actions-icon.svg" alt="GitHub Actions Logo" height="50"></a></div> |
-| Many thanks to [DigitalOcean](https://www.digitalocean.com) for providing the project with hosting credits. | Many thanks to [JetBrains](https://www.jetbrains.com/) for providing a free license of [IntelliJ IDEA](https://www.jetbrains.com/idea/) to kindly support the development of OSPOS. | Many thanks to [GitHub](https://github.com) for providing free continuous integration via GitHub Actions for open-source projects. |

@@ -45,6 +45,18 @@ use App\Models\Employee;
         $employee = model(Employee::class);
         ?>
 
+        $('#daterangepicker').on('apply.daterangepicker', function(ev, picker) {
+            table_support.refresh();
+        });
+
+        $('#filters').on('hidden.bs.select', function(e) {
+            table_support.refresh();
+        });
+
+        $('#stock_location').on('change', function(e) {
+            table_support.refresh();
+        });
+
         table_support.init({
             employee_id: <?= $employee->get_logged_in_employee_info()->person_id ?>,
             resource: '<?= esc($controller_name) ?>',

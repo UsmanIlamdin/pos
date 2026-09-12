@@ -226,6 +226,7 @@
             search: options.resource || false,
             showColumns: true,
             clickToSelect: true,
+            filterControl: true,
             showExport: true,
             exportDataType: 'basic',
             exportTypes: ['json', 'xml', 'csv', 'txt', 'sql', 'excel', 'pdf'],

@@ -55,6 +55,10 @@ function transform_headers(array $headers, bool $readonly = false, bool $editabl
             'class'      => isset($element['checkbox']) || preg_match('(^$|&nbsp)', current($element)) ? 'print_hide' : '',
             'sorter'     => $element['sorter'] ?? ''
         ];
+
+        if (isset($element['filterControl'])) {
+            $result[count($result) - 1]['filterControl'] = $element['filterControl'];
+        }
     }
 
     return json_encode($result);
@@ -422,7 +426,7 @@ function get_items_manage_table_headers(): string
     $headers[] = ['item_pic' => lang('Items.image'), 'sortable' => false];
 
     foreach ($definitionsWithTypes as $definition_id => $definitionInfo) {
-        $headers[] = [$definition_id => $definitionInfo['name'], 'sortable' => false];
+        $headers[] = [$definition_id => $definitionInfo['name'], 'sortable' => false, 'filterControl' => 'input'];
     }
 
     $headers[] = ['inventory' => '', 'escape' => false];

@@ -247,6 +247,19 @@ class Item extends Model
             $builder->join('attribute_values', 'attribute_values.attribute_id = attribute_links.attribute_id', 'left');
         }
 
+        if (!empty($filters['column_filters'])) {
+            foreach ($filters['column_filters'] as $col => $val) {
+                if ($val === '') continue;
+                if (is_numeric($col) && $attributes_enabled) {
+                    $escaped_val = $this->db->escapeLikeString($val);
+                    $like_str = "%{$col}_{$escaped_val}%";
+                    $builder->having("(attribute_values LIKE '{$like_str}' OR attribute_dtvalues LIKE '{$like_str}' OR attribute_dvalues LIKE '{$like_str}')");
+                } else {
+                    $builder->like($col, $val);
+                }
+            }
+        }
+
         $builder->where('items.deleted', $filters['is_deleted']);
 
         if ($filters['empty_upc']) {
