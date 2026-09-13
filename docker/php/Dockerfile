@@ -80,8 +80,8 @@ WORKDIR /app
 # Copy built app from builder stage
 COPY --from=builder --chown=www-data:www-data /build /app
 
-# Set correct permissions for writable dirs
 # Also allow www-data to write /app/.env (app auto-provisions throttle.key there)
+# Set correct permissions for writable application files
 RUN chmod -R 750 \
         /app/writable/logs \
         /app/writable/uploads \
@@ -89,8 +89,7 @@ RUN chmod -R 750 \
         /app/public/uploads \
     && ln -nsf /app/public /var/www/html \
     && cp /app/.env.example /app/.env \
-    && chown www-data:www-data /app/.env \
-    && chmod 660 /app/.env \
-    && chown www-data:www-data /app
+    && chown -R www-data:www-data /app \
+    && chmod 660 /app/.env
 
 EXPOSE 80

@@ -59,9 +59,67 @@ function transform_headers(array $headers, bool $readonly = false, bool $editabl
         if (isset($element['filterControl'])) {
             $result[count($result) - 1]['filterControl'] = $element['filterControl'];
         }
+
+        if (isset($element['filterData'])) {
+            $result[count($result) - 1]['filterData'] = $element['filterData'];
+        }
+
+        if (isset($element['headerFilter'])) {
+            $result[count($result) - 1]['headerFilter'] = $element['headerFilter'];
+        }
     }
 
     return json_encode($result);
+}
+
+/**
+ * Header config for an attribute column on the Items manage table, based on definition type.
+ *
+ * DROPDOWN / CHECKBOX → bootstrap-select quick filter beside the column title
+ * DATE / DECIMAL → sortable (ASC/DESC arrows), no text filter
+ * TEXT → no quick filter
+ */
+function get_item_attribute_column_header(int $definition_id, array $definitionInfo): array
+{
+    $attribute = model(Attribute::class);
+    $name = $definitionInfo['name'];
+    $type = $definitionInfo['type'] ?? TEXT;
+    $header = [$definition_id => $name, 'sortable' => false];
+
+    switch ($type) {
+        case DROPDOWN:
+            $values = $attribute->getDefinitionValues($definition_id);
+            $options = [];
+            foreach ($values as $value) {
+                $options[(string) $value] = (string) $value;
+            }
+            $header['headerFilter'] = ['options' => $options];
+            break;
+
+        case CHECKBOX:
+            $header['headerFilter'] = [
+                'options' => [
+                    '1' => lang('Common.true'),
+                    '0' => lang('Common.false'),
+                ],
+            ];
+            break;
+
+        case DATE:
+            $header['sortable'] = true;
+            break;
+
+        case DECIMAL:
+            $header['sortable'] = true;
+            $header['sorter'] = 'number_sorter';
+            break;
+
+        case TEXT:
+        default:
+            break;
+    }
+
+    return $header;
 }
 
 
@@ -426,7 +484,7 @@ function get_items_manage_table_headers(): string
     $headers[] = ['item_pic' => lang('Items.image'), 'sortable' => false];
 
     foreach ($definitionsWithTypes as $definition_id => $definitionInfo) {
-        $headers[] = [$definition_id => $definitionInfo['name'], 'sortable' => false, 'filterControl' => 'input'];
+        $headers[] = get_item_attribute_column_header((int) $definition_id, $definitionInfo);
     }
 
     $headers[] = ['inventory' => '', 'escape' => false];
@@ -663,6 +721,10 @@ function expand_attribute_values(array $definition_names, array $row): array
             // Format DECIMAL attributes according to locale
             if (is_array($definitionInfo) && isset($definitionInfo['type']) && $definitionInfo['type'] === DECIMAL) {
                 $attribute_values["$definition_id"] = to_decimals($raw_value);
+            } elseif (is_array($definitionInfo) && isset($definitionInfo['type']) && $definitionInfo['type'] === CHECKBOX) {
+                $attribute_values["$definition_id"] = ((string) $raw_value === '1')
+                    ? lang('Common.true')
+                    : lang('Common.false');
             } else {
                 $attribute_values["$definition_id"] = $raw_value;
             }

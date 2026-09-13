@@ -111,12 +111,24 @@ class Items extends Secure_Controller
         $search = $this->request->getGet('search', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
         $limit = $this->request->getGet('limit', FILTER_SANITIZE_NUMBER_INT);
         $offset = $this->request->getGet('offset', FILTER_SANITIZE_NUMBER_INT);
-        $sort = $this->sanitizeSortColumn(item_headers(), $this->request->getGet('sort', FILTER_SANITIZE_FULL_SPECIAL_CHARS), 'item_id');
         $order = $this->request->getGet('order', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
 
         $this->item_lib->set_item_location($this->request->getGet('stock_location'));
 
         $definitionNames = $this->attribute->getDefinitionsByFlags(Attribute::SHOW_IN_ITEMS);
+        $definitionsWithTypes = $this->attribute->getDefinitionsByFlags(Attribute::SHOW_IN_ITEMS, true);
+
+        $sortableAttributeHeaders = [];
+        foreach ($definitionsWithTypes as $definitionId => $definitionInfo) {
+            if (in_array($definitionInfo['type'], [DATE, DECIMAL], true)) {
+                $sortableAttributeHeaders[] = [(string) $definitionId => $definitionInfo['name']];
+            }
+        }
+        $sort = $this->sanitizeSortColumn(
+            array_merge(item_headers(), $sortableAttributeHeaders),
+            $this->request->getGet('sort', FILTER_SANITIZE_FULL_SPECIAL_CHARS),
+            'item_id'
+        );
 
         $filters = [
             'start_date'        => $this->request->getGet('start_date'),
@@ -129,7 +141,8 @@ class Items extends Secure_Controller
             'search_custom'     => false,
             'is_deleted'        => false,
             'temporary'         => false,
-            'definition_ids'    => array_keys($definitionNames)
+            'definition_ids'    => array_keys($definitionNames),
+            'definition_types'  => array_map(static fn(array $info) => $info['type'], $definitionsWithTypes),
         ];
 
         // Check if any filter is set in the multiselect dropdown

@@ -283,14 +283,43 @@ class Item extends Model
 
         // get_found_rows case
         if ($count_only) {
-            return $builder->get()->getRow()->count;
+            $has_attribute_having = $attributes_enabled && (
+                !empty($filters['column_filters'])
+                || (!empty($search) && !empty($filters['search_custom']))
+            );
+
+            if ($has_attribute_having) {
+                $builder->groupBy('items.item_id');
+
+                return $builder->get()->getNumRows();
+            }
+
+            $row = $builder->get()->getRow();
+
+            return (int) ($row->count ?? 0);
         }
 
-        // Avoid duplicated entries with same name because of inventory reporting multiple changes on the same item in the same date range
         $builder->groupBy('items.item_id');
 
-        // Order by name of item by default
-        $builder->orderBy($sort, $order);
+        if (ctype_digit((string) $sort) && $attributes_enabled) {
+            $definitionId = (int) $sort;
+            $definitionType = $filters['definition_types'][$definitionId]
+                ?? $filters['definition_types'][(string) $definitionId]
+                ?? null;
+            $order = strtolower((string) $order) === 'desc' ? 'desc' : 'asc';
+
+            if ($definitionType === DATE) {
+                $builder->select("MAX(CASE WHEN attribute_links.definition_id = {$definitionId} THEN attribute_values.attribute_date END) AS attribute_sort");
+                $builder->orderBy('attribute_sort', $order);
+            } elseif ($definitionType === DECIMAL) {
+                $builder->select("MAX(CASE WHEN attribute_links.definition_id = {$definitionId} THEN attribute_values.attribute_decimal END) AS attribute_sort");
+                $builder->orderBy('attribute_sort', $order);
+            } else {
+                $builder->orderBy('items.name', 'asc');
+            }
+        } else {
+            $builder->orderBy($sort, $order);
+        }
 
         if ($rows > 0) {
             $builder->limit($rows, $limit_from);

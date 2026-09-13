@@ -16,6 +16,44 @@ use App\Models\Employee;
 
 <?= view('partial/header') ?>
 
+<style>
+    #table_holder .fixed-table-container thead th,
+    #table_holder .fixed-table-header thead th {
+        overflow: visible;
+    }
+
+    #table_holder thead th .th-inner {
+        white-space: nowrap;
+    }
+
+    #table_holder thead th .attribute-header-filter-wrap {
+        display: inline-block;
+        vertical-align: middle;
+        margin-left: 6px;
+        max-width: 160px;
+    }
+
+    #table_holder thead th .attribute-header-filter-wrap .bootstrap-select {
+        width: auto !important;
+    }
+
+    #table_holder thead th .attribute-header-filter-wrap .bootstrap-select > .btn,
+    #table_holder thead th .attribute-header-filter-wrap .bootstrap-select > .btn:hover,
+    #table_holder thead th .attribute-header-filter-wrap .bootstrap-select > .btn:focus,
+    #table_holder thead th .attribute-header-filter-wrap .bootstrap-select > .btn:active {
+        outline: none !important;
+        box-shadow: none !important;
+    }
+
+    #table_holder thead th .attribute-header-filter-wrap .bootstrap-select:not(.open) > .btn,
+    #table_holder thead th .attribute-header-filter-wrap .bootstrap-select:not(.open) > .btn:hover,
+    #table_holder thead th .attribute-header-filter-wrap .bootstrap-select:not(.open) > .btn:focus {
+        background-color: #fff !important;
+        border-color: #ccc !important;
+        color: #333 !important;
+    }
+</style>
+
 <script type="text/javascript">
     $(document).ready(function() {
         $('#generate_barcodes').click(function() {
@@ -57,19 +95,158 @@ use App\Models\Employee;
             table_support.refresh();
         });
 
+        // Attribute column filters (DROPDOWN / CHECKBOX) — values keyed by definition id
+        let attribute_column_filters = {};
+
+        /**
+         * Fully close header selectpickers.
+         * With data-container="body", the menu is moved into a .bs-container on body —
+         * removing only the "open" class leaves that menu visible and the btn :focus style stuck.
+         */
+        const close_attribute_header_filters = function() {
+            $('.attribute-header-filter').each(function() {
+                const picker = $(this).data('selectpicker');
+                if (!picker) {
+                    return;
+                }
+
+                picker.$newElement.removeClass('open show');
+                picker.$button
+                    .removeClass('open show active')
+                    .attr('aria-expanded', 'false')
+                    .blur();
+
+                if (picker.$bsContainer && picker.$bsContainer.length) {
+                    picker.$bsContainer.removeClass('open show').detach();
+                }
+
+                // Restore menu under the picker for the next open
+                if (picker.$menu && picker.$menu.length && !picker.$newElement.find('.dropdown-menu').length) {
+                    picker.$newElement.append(picker.$menu);
+                }
+            });
+
+            // Orphaned body containers from destroyed/rebuilt header pickers
+            $('body > .bs-container').remove();
+        };
+
+        const init_attribute_header_filters = function() {
+            const tableOptions = $('#table').bootstrapTable('getOptions');
+            if (!tableOptions || !tableOptions.columns) {
+                return;
+            }
+
+            const columns = [].concat.apply([], tableOptions.columns);
+
+            columns.forEach(function(col) {
+                if (!col || !col.headerFilter || !col.headerFilter.options) {
+                    return;
+                }
+
+                const field = String(col.field);
+                // Only the visible sticky/fixed header — avoid duplicate pickers on the hidden clone
+                const $ths = $('#table_holder .fixed-table-header th[data-field="' + field + '"]');
+                const $targetThs = $ths.length
+                    ? $ths
+                    : $('#table_holder th[data-field="' + field + '"]');
+
+                $targetThs.each(function() {
+                    const $th = $(this);
+                    if ($th.find('.attribute-header-filter-wrap').length) {
+                        return;
+                    }
+
+                    const $inner = $th.find('.th-inner').first();
+                    if (!$inner.length) {
+                        return;
+                    }
+
+                    const $wrap = $('<span class="attribute-header-filter-wrap"></span>');
+                    const $select = $('<select></select>')
+                        .addClass('selectpicker show-menu-arrow attribute-header-filter')
+                        .attr({
+                            'data-style': 'btn-default btn-sm',
+                            'data-width': 'fit',
+                            'data-none-selected-text': <?= json_encode(lang('Common.none_selected_text')) ?>,
+                            'data-container': 'body'
+                        });
+
+                    $select.append($('<option></option>').attr('value', '').text(''));
+                    $.each(col.headerFilter.options, function(value, label) {
+                        $select.append($('<option></option>').attr('value', value).text(label));
+                    });
+
+                    if (attribute_column_filters[field] !== undefined) {
+                        $select.val(attribute_column_filters[field]);
+                    }
+
+                    $wrap.append($select);
+                    $inner.append($wrap);
+
+                    $select.selectpicker();
+
+                    // Prevent column sort when clicking the picker button only
+                    $wrap.on('click', function(e) {
+                        e.stopPropagation();
+                    });
+
+                    $select.on('changed.bs.select', function() {
+                        const val = $(this).val();
+                        if (val === '' || val === null) {
+                            delete attribute_column_filters[field];
+                        } else {
+                            attribute_column_filters[field] = val;
+                        }
+
+                        close_attribute_header_filters();
+
+                        setTimeout(function() {
+                            table_support.refresh();
+                        }, 0);
+                    });
+                });
+            });
+        };
+
+        // Outside click / Escape closes menu + clears stuck button styles
+        $(document).on('mousedown.attributeHeaderFilter', function(e) {
+            const $t = $(e.target);
+            if ($t.closest('.attribute-header-filter-wrap, .bs-container').length) {
+                return;
+            }
+            close_attribute_header_filters();
+        });
+
+        // Option click in the body-attached menu (covers same-value re-click too)
+        $(document).on('click.attributeHeaderFilterOption', 'body > .bs-container li a', function() {
+            setTimeout(close_attribute_header_filters, 0);
+        });
+
+        $(document).on('keydown.attributeHeaderFilter', function(e) {
+            if (e.key === 'Escape' || e.keyCode === 27) {
+                close_attribute_header_filters();
+            }
+        });
+
         table_support.init({
             employee_id: <?= $employee->get_logged_in_employee_info()->person_id ?>,
             resource: '<?= esc($controller_name) ?>',
             headers: <?= $table_headers ?>,
             pageSize: <?= $config['lines_per_page'] ?>,
             uniqueId: 'items.item_id',
+            filterControl: false,
             queryParams: function() {
                 return $.extend(arguments[0], {
                     "start_date": start_date,
                     "end_date": end_date,
                     "stock_location": $("#stock_location").val(),
-                    "filters": $("#filters").val()
+                    "filters": $("#filters").val(),
+                    "filter": JSON.stringify(attribute_column_filters)
                 });
+            },
+            onPostHeader: function() {
+                close_attribute_header_filters();
+                init_attribute_header_filters();
             },
             onLoadSuccess: function(response) {
                 $('a.rollover').imgPreview({
@@ -80,7 +257,8 @@ use App\Models\Employee;
                         top: 10,
                         left: -210
                     }
-                })
+                });
+                init_attribute_header_filters();
             }
         });
     });
