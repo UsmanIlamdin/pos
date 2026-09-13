@@ -27,159 +27,312 @@ $request = Services::request();
     <link rel="shortcut icon" type="image/x-icon" href="images/favicon.ico">
     <?php
     $theme = (empty($config['theme'])
-        || 'paper' == $config['theme']
-        || 'readable' == $config['theme']
+    || 'paper' == $config['theme']
+    || 'readable' == $config['theme']
         ? 'flatly'
         : $config['theme']);
     ?>
     <link rel="stylesheet" href="resources/bootswatch5/<?= esc($theme, 'attr') ?>/bootstrap.min.css">
     <link rel="stylesheet" href="css/login.css">
     <meta name="theme-color" content="#2c3e50">
+
+    <style>
+        /* Password show/hide button */
+        .password-wrapper {
+            position: relative;
+        }
+
+        .password-toggle {
+            border: 0;
+            background: transparent;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        .password-wrapper.form-floating .password-toggle {
+            position: absolute;
+            top: 50%;
+            right: 0.5rem;
+            z-index: 5;
+            width: 2.5rem;
+            height: 2.5rem;
+            transform: translateY(-50%);
+            color: var(--bs-secondary-color);
+        }
+
+        .password-wrapper.form-floating .password-toggle:hover {
+            color: var(--bs-primary);
+        }
+
+        .password-wrapper.form-floating input {
+            padding-right: 3.5rem;
+        }
+
+        .password-toggle:focus {
+            outline: none;
+            box-shadow: none;
+        }
+
+        .password-toggle:focus-visible {
+            outline: 2px solid var(--bs-primary);
+            outline-offset: 2px;
+            border-radius: 0.25rem;
+        }
+
+        .password-toggle .eye-icon {
+            width: 1.1rem;
+            height: 1.1rem;
+        }
+    </style>
 </head>
 
 <body class="bg-secondary-subtle d-flex flex-column">
-    <main class="d-flex justify-content-around align-items-center flex-grow-1">
-        <div class="container-login container-fluid d-flex flex-column flex-md-row bg-body shadow rounded m-3 p-4 p-md-0">
-            <div class="box-logo d-flex flex-column justify-content-center align-items-center border-end border-secondary-subtle px-4 pb-3 p-md-4">
-                <?php if (isset($config['company_logo']) && !empty($config['company_logo'])): ?>
-                    <img class="logo w-100" src="<?= base_url('uploads/' . esc($config['company_logo'], 'url')) ?>" alt="<?= esc(lang('Common.logo') . '&nbsp;' . $config['company']) ?>">
-                <?php else: ?>
-                    <svg class="logo text-primary" role="img" viewBox="0 0 308.57998 308.57997" xmlns="http://www.w3.org/2000/svg">
-                        <title><?= lang('Common.software_title') . '&nbsp;' . lang('Common.logo') ?></title>
-                        <circle cx="154.28999" cy="154.28999" r="154.28999" fill="currentColor" />
-                        <path fill="#fff" d="M154.88998 145.66999c-.03-1.26-.03-3.29.19-4.29 4.6-11.1 15.57-18.82 28.3-18.82h.41v58.3c0 .12-.03.78-.04.9-.54 16.46-14.01 29.7-30.59 29.7v27.08c21 0 39.17-11.27 49.29-28.07l.07-.11c2.9.45 5.86.75 8.9.75 31.95 0 57.81-26 57.81-57.81 0-30.87-24.37-56.46-55.1-57.81h-30.74c-17.18 0-32.61 7.64-43.22 19.63-10.59-11.92-25.86-19.59-43.02-19.59-31.86 0-57.77 25.91-57.77 57.77 0 31.86 25.91 57.77 57.77 57.77 31.86 0 57.77-25.91 57.77-57.77v-3.68c-.01.01-.02-3.31-.03-3.95zm-57.75 38.33c-16.92 0-30.69-13.77-30.69-30.69s13.77-30.69 30.69-30.69 30.69 13.77 30.69 30.69-13.77 30.69-30.69 30.69zm142.96-19.87c-4.33 11.64-15.57 19.9-28.7 19.9h-.54v-61.47h.54c13.13 0 24.37 8.26 28.7 19.9 1.35 3.25 2.03 6.91 2.03 10.83s-.67 7.59-2.03 10.84z" />
-                    </svg>
-                <?php endif; ?>
-            </div>
-            <section class="box-login d-flex flex-column justify-content-center align-items-center p-md-4">
-                <?= form_open('login', ['id' => 'login-form']) ?>
-
-                <h3 id="form-heading" class="text-center m-0">
-                    <?php if ($isNewInstall): ?>
-                        <?= lang('Login.initialization_required') ?>
-                    <?php elseif (!$isLatest): ?>
-                        <?= lang('Login.migration_required') ?>
-                    <?php else: ?>
-                        <?= lang('Login.welcome', [lang('Common.software_short')]) ?>
-                    <?php endif; ?>
-                </h3>
-
-                <div id="migration-warning" class="alert alert-warning mt-3<?= ($isNewInstall || !$isLatest) ? '' : ' d-none' ?>">
-                    <strong>
-                        <?php if ($isNewInstall): ?>
-                            <?= lang('Login.initialization_message') ?>
-                        <?php else: ?>
-                            <?= lang('Login.migration_auth_message', [$latestVersion]) ?>
-                        <?php endif; ?>
-                    </strong>
-                </div>
-
-                <?php if ($hasErrors): ?>
-                    <?php foreach ($validation->getErrors() as $error): ?>
-                        <div class="alert alert-danger mt-3">
-                            <?= $error ?>
-                        </div>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-
-                <div id="migration-success" class="alert alert-success d-none mt-3">
-                    <strong><?= lang('Login.migration_complete') ?></strong> <?= lang('Login.migration_complete_login') ?>
-                </div>
-
-                <div id="migration-progress" class="d-none mt-4">
-                    <h3 class="text-center mb-4"><?= lang('Login.migration_initializing') ?></h3>
-                    <div class="progress mb-3" style="height: 30px;">
-                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
-                             role="progressbar"
-                             style="width: 100%">
-                        </div>
-                    </div>
-                    <p class="text-center text-muted" id="migration-status">
-                        <?= lang('Login.migration_running') ?>
-                    </p>
-                </div>
-
-                <div id="migration-error" class="alert alert-danger d-none mt-3" role="alert">
-                    <strong>Error:</strong> <span id="migration-error-message"></span>
-                </div>
-
-                <div id="login-fields" class="w-100<?= $isNewInstall ? ' d-none' : '' ?>">
-                    <?php if (empty($config['login_form']) || 'floating_labels' == ($config['login_form'])): ?>
-                        <div class="form-floating mt-3">
-                            <input class="form-control" id="input-username" name="username" type="text" placeholder="<?= lang('Login.username') ?>" <?php if (ENVIRONMENT == "testing") echo 'value="admin"'; ?>>
-                            <label for="input-username"><?= lang('Login.username') ?></label>
-                        </div>
-                        <div class="form-floating mb-3">
-                            <input class="form-control" id="input-password" name="password" type="password" placeholder="<?= lang('Login.password') ?>" <?php if (ENVIRONMENT == "testing") echo 'value="pointofsale"'; ?>>
-                            <label for="input-password"><?= lang('Login.password') ?></label>
-                        </div>
-                    <?php elseif ('input_groups' == ($config['login_form'])): ?>
-                        <div class="input-group mt-3">
-                            <span class="input-group-text" id="input-username">
-                                <svg class="bi bi-person-fill" fill="currentColor" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-                                    <title><?= lang('Common.icon') . '&nbsp;' . lang('Login.username') ?></title>
-                                    <path d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6" />
-                                </svg>
-                            </span>
-                            <input class="form-control" name="username" type="text" placeholder="<?= lang('Login.username'); ?>" aria-label="<?= lang('Login.username') ?>" aria-describedby="input-username" <?php if (ENVIRONMENT == "testing") echo 'value="admin"'; ?>>
-                        </div>
-                        <div class="input-group mb-3">
-                            <span class="input-group-text" id="input-password">
-                                <svg class="bi bi-key-fill" fill="currentColor" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-                                    <title><?= lang('Common.icon') . '&nbsp;' . lang('Login.password') ?></title>
-                                    <path d="M3.5 11.5a3.5 3.5 0 1 1 3.163-5H14L15.5 8 14 9.5l-1-1-1 1-1-1-1 1-1-1-1 1H6.663a3.5 3.5 0 0 1-3.163 2M2.5 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2" />
-                                </svg>
-                            </span>
-                            <input class="form-control" name="password" type="password" placeholder="<?= lang('Login.password') ?>" aria-label="<?= lang('Login.password') ?>" aria-describedby="input-password" <?php if (ENVIRONMENT == "testing") echo 'value="pointofsale"'; ?>>
-                        </div>
-                    <?php endif; ?>
-
-                    <?php if ($gcaptchaEnabled): ?>
-                        <script src="https://www.google.com/recaptcha/api.js"></script>
-                        <div class="g-recaptcha mb-3" style="text-align: center;" data-sitekey="<?= esc($config['gcaptcha_site_key']) ?>"></div>
-                    <?php endif; ?>
-                </div>
-
-                <div class="d-grid">
-                    <button id="submit-button" class="btn btn-lg btn-primary" name="login-button" type="submit">
-                        <?php if ($isNewInstall): ?>
-                            <?= lang('Login.initialize') ?>
-                        <?php elseif (!$isLatest): ?>
-                            <?= lang('Module.migrate') ?>
-                        <?php else: ?>
-                            <?= lang('Login.go') ?>
-                        <?php endif; ?>
-                    </button>
-                </div>
-                <?= form_close() ?>
-            </section>
-        </div>
-    </main>
-
-    <footer class="d-flex justify-content-center flex-shrink-0 text-center">
-        <div class="footer container-fluid bg-body rounded shadow p-3 mb-md-4 mx-md-3">
-            <span class="text-primary">
-                <svg height="1.25em" role="img" viewBox="0 0 308.57998 308.57997" xmlns="http://www.w3.org/2000/svg">
+<main class="d-flex justify-content-around align-items-center flex-grow-1">
+    <div class="container-login container-fluid d-flex flex-column flex-md-row bg-body shadow rounded m-3 p-4 p-md-0">
+        <div class="box-logo d-flex flex-column justify-content-center align-items-center border-end border-secondary-subtle px-4 pb-3 p-md-4">
+            <?php if (isset($config['company_logo']) && !empty($config['company_logo'])): ?>
+                <img class="logo w-100" src="<?= base_url('uploads/' . esc($config['company_logo'], 'url')) ?>" alt="<?= esc(lang('Common.logo') . '&nbsp;' . $config['company']) ?>">
+            <?php else: ?>
+                <svg class="logo text-primary" role="img" viewBox="0 0 308.57998 308.57997" xmlns="http://www.w3.org/2000/svg">
                     <title><?= lang('Common.software_title') . '&nbsp;' . lang('Common.logo') ?></title>
                     <circle cx="154.28999" cy="154.28999" r="154.28999" fill="currentColor" />
                     <path fill="#fff" d="M154.88998 145.66999c-.03-1.26-.03-3.29.19-4.29 4.6-11.1 15.57-18.82 28.3-18.82h.41v58.3c0 .12-.03.78-.04.9-.54 16.46-14.01 29.7-30.59 29.7v27.08c21 0 39.17-11.27 49.29-28.07l.07-.11c2.9.45 5.86.75 8.9.75 31.95 0 57.81-26 57.81-57.81 0-30.87-24.37-56.46-55.1-57.81h-30.74c-17.18 0-32.61 7.64-43.22 19.63-10.59-11.92-25.86-19.59-43.02-19.59-31.86 0-57.77 25.91-57.77 57.77 0 31.86 25.91 57.77 57.77 57.77 31.86 0 57.77-25.91 57.77-57.77v-3.68c-.01.01-.02-3.31-.03-3.95zm-57.75 38.33c-16.92 0-30.69-13.77-30.69-30.69s13.77-30.69 30.69-30.69 30.69 13.77 30.69 30.69-13.77 30.69-30.69 30.69zm142.96-19.87c-4.33 11.64-15.57 19.9-28.7 19.9h-.54v-61.47h.54c13.13 0 24.37 8.26 28.7 19.9 1.35 3.25 2.03 6.91 2.03 10.83s-.67 7.59-2.03 10.84z" />
                 </svg>
-            </span>
-            <span><?= lang('Common.software_title') ?></span>
+            <?php endif; ?>
         </div>
-    </footer>
 
-    <?php if (ENVIRONMENT == 'development' || get_cookie('debug') == 'true' || $request->getGet('debug') == 'true') : ?>
-        <!-- inject:login:debug:js -->
-        <!-- endinject -->
-    <?php else : ?>
-        <!-- inject:login:prod:js -->
-        <!-- endinject -->
-    <?php endif; ?>
-    <script>
-        // @noinspection JSInitializingVariableWithUndefined
-        const APP_STATE = {
-            isNewInstall: <?= $isNewInstall ? 'true' : 'false' ?>,
+        <section class="box-login d-flex flex-column justify-content-center align-items-center p-md-4">
+            <?= form_open('login', ['id' => 'login-form']) ?>
+
+            <h3 id="form-heading" class="text-center m-0">
+                <?php if ($isNewInstall): ?>
+                    <?= lang('Login.initialization_required') ?>
+                <?php elseif (!$isLatest): ?>
+                    <?= lang('Login.migration_required') ?>
+                <?php else: ?>
+                    <?= lang('Login.welcome', [lang('Common.software_short')]) ?>
+                <?php endif; ?>
+            </h3>
+
+            <div id="migration-warning" class="alert alert-warning mt-3<?= ($isNewInstall || !$isLatest) ? '' : ' d-none' ?>">
+                <strong>
+                    <?php if ($isNewInstall): ?>
+                        <?= lang('Login.initialization_message') ?>
+                    <?php else: ?>
+                        <?= lang('Login.migration_auth_message', [$latestVersion]) ?>
+                    <?php endif; ?>
+                </strong>
+            </div>
+
+            <?php if ($hasErrors): ?>
+                <?php foreach ($validation->getErrors() as $error): ?>
+                    <div class="alert alert-danger mt-3">
+                        <?= $error ?>
+                    </div>
+                <?php endforeach; ?>
+            <?php endif; ?>
+
+            <div id="migration-success" class="alert alert-success d-none mt-3">
+                <strong><?= lang('Login.migration_complete') ?></strong> <?= lang('Login.migration_complete_login') ?>
+            </div>
+
+            <div id="migration-progress" class="d-none mt-4">
+                <h3 class="text-center mb-4"><?= lang('Login.migration_initializing') ?></h3>
+                <div class="progress mb-3" style="height: 30px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+                         role="progressbar"
+                         style="width: 100%">
+                    </div>
+                </div>
+                <p class="text-center text-muted" id="migration-status">
+                    <?= lang('Login.migration_running') ?>
+                </p>
+            </div>
+
+            <div id="migration-error" class="alert alert-danger d-none mt-3" role="alert">
+                <strong>Error:</strong> <span id="migration-error-message"></span>
+            </div>
+
+            <div id="login-fields" class="w-100<?= $isNewInstall ? ' d-none' : '' ?>">
+                <?php if (empty($config['login_form']) || 'floating_labels' == ($config['login_form'])): ?>
+
+                    <div class="form-floating mt-3">
+                        <input class="form-control"
+                               id="input-username"
+                               name="username"
+                               type="text"
+                               placeholder="<?= lang('Login.username') ?>"
+                            <?php if (ENVIRONMENT == "testing") echo 'value="admin"'; ?>>
+                        <label for="input-username"><?= lang('Login.username') ?></label>
+                    </div>
+
+                    <div class="form-floating mb-3 password-wrapper">
+                        <input class="form-control"
+                               id="input-password"
+                               name="password"
+                               type="password"
+                               placeholder="<?= lang('Login.password') ?>"
+                            <?php if (ENVIRONMENT == "testing") echo 'value="pointofsale"'; ?>>
+
+                        <label for="input-password"><?= lang('Login.password') ?></label>
+
+                        <button type="button"
+                                class="password-toggle"
+                                data-target="#input-password"
+                                aria-label="Show password"
+                                title="Show password">
+                            <svg class="eye-icon eye-show"
+                                 fill="currentColor"
+                                 viewBox="0 0 16 16"
+                                 aria-hidden="true">
+                                <path d="M16 8s-3-5-8-5-8 5-8 5 3 5 8 5 8-5 8-5z"/>
+                                <path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+                                <path d="M8 9.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/>
+                            </svg>
+
+                            <svg class="eye-icon eye-hide d-none"
+                                 fill="currentColor"
+                                 viewBox="0 0 16 16"
+                                 aria-hidden="true">
+                                <path d="M13.359 11.238C14.533 10.134 15.264 9 15.264 9S12.264 4 8 4c-.76 0-1.468.145-2.116.387L4.95 3.453l-.707.707 9.116 9.116.707-.707-.707-.707z"/>
+                                <path d="M3.53 4.53C1.456 5.826.264 8 .264 8s3 5 7.736 5c1.071 0 2.046-.233 2.913-.583l-.811-.811C9.514 11.855 8.804 12 8 12c-3.584 0-6.172-3.62-6.729-4.5.32-.505 1.288-1.811 2.698-2.69L3.53 4.53z"/>
+                                <path d="M6.707 7.414A1.5 1.5 0 0 0 8.586 9.293L6.707 7.414z"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                <?php elseif ('input_groups' == ($config['login_form'])): ?>
+
+                    <div class="input-group mt-3">
+                            <span class="input-group-text" id="input-username">
+                                <svg class="bi bi-person-fill"
+                                     fill="currentColor"
+                                     viewBox="0 0 16 16"
+                                     xmlns="http://www.w3.org/2000/svg">
+                                    <title><?= lang('Common.icon') . '&nbsp;' . lang('Login.username') ?></title>
+                                    <path d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0-0-6 3 3 0 0 0 0 6" />
+                                </svg>
+                            </span>
+
+                        <input class="form-control"
+                               name="username"
+                               type="text"
+                               placeholder="<?= lang('Login.username'); ?>"
+                               aria-label="<?= lang('Login.username') ?>"
+                               aria-describedby="input-username"
+                            <?php if (ENVIRONMENT == "testing") echo 'value="admin"'; ?>>
+                    </div>
+
+                    <div class="input-group mb-3 password-wrapper">
+                            <span class="input-group-text" id="input-password">
+                                <svg class="bi bi-key-fill"
+                                     fill="currentColor"
+                                     viewBox="0 0 16 16"
+                                     xmlns="http://www.w3.org/2000/svg">
+                                    <title><?= lang('Common.icon') . '&nbsp;' . lang('Login.password') ?></title>
+                                    <path d="M3.5 11.5a3.5 3.5 0 1 1 3.163-5H14L15.5 8 14 9.5l-1-1-1 1-1-1-1 1-1-1-1 1H6.663a3.5 3.5 0 0 1-3.163 2M2.5 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2" />
+                                </svg>
+                            </span>
+
+                        <input class="form-control"
+                               name="password"
+                               type="password"
+                               placeholder="<?= lang('Login.password') ?>"
+                               aria-label="<?= lang('Login.password') ?>"
+                               aria-describedby="input-password"
+                            <?php if (ENVIRONMENT == "testing") echo 'value="pointofsale"'; ?>>
+
+                        <button type="button"
+                                class="btn btn-outline-secondary password-toggle"
+                                aria-label="Show password"
+                                title="Show password">
+
+                            <svg class="eye-icon eye-show"
+                                 fill="currentColor"
+                                 viewBox="0 0 16 16"
+                                 aria-hidden="true">
+                                <path d="M16 8s-3-5-8-5-8 5-8 5 3 5 8 5 8-5 8-5z"/>
+                                <path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+                                <path d="M8 9.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/>
+                            </svg>
+
+                            <svg class="eye-icon eye-hide d-none"
+                                 fill="currentColor"
+                                 viewBox="0 0 16 16"
+                                 aria-hidden="true">
+                                <path d="M13.359 11.238C14.533 10.134 15.264 9 15.264 9S12.264 4 8 4c-.76 0-1.468.145-2.116.387L4.95 3.453l-.707.707 9.116 9.116.707-.707-.707-.707z"/>
+                                <path d="M3.53 4.53C1.456 5.826.264 8 .264 8s3 5 7.736 5c1.071 0 2.046-.233 2.913-.583l-.811-.811C9.514 11.855 8.804 12 8 12c-3.584 0-6.172-3.62-6.729-4.5.32-.505 1.288-1.811 2.698-2.69L3.53 4.53z"/>
+                                <path d="M6.707 7.414A1.5 1.5 0 0 0 8.586 9.293L6.707 7.414z"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                <?php endif; ?>
+
+                <?php if ($gcaptchaEnabled): ?>
+                    <script src="https://www.google.com/recaptcha/api.js"></script>
+                    <div class="g-recaptcha mb-3"
+                         style="text-align: center;"
+                         data-sitekey="<?= esc($config['gcaptcha_site_key']) ?>"></div>
+                <?php endif; ?>
+            </div>
+
+            <div class="d-grid">
+                <button id="submit-button"
+                        class="btn btn-lg btn-primary"
+                        name="login-button"
+                        type="submit">
+                    <?php if ($isNewInstall): ?>
+                        <?= lang('Login.initialize') ?>
+                    <?php elseif (!$isLatest): ?>
+                        <?= lang('Module.migrate') ?>
+                    <?php else: ?>
+                        <?= lang('Login.go') ?>
+                    <?php endif; ?>
+                </button>
+            </div>
+
+            <?= form_close() ?>
+        </section>
+    </div>
+</main>
+
+<footer class="d-flex justify-content-center flex-shrink-0 text-center">
+    <div class="footer container-fluid bg-body rounded shadow p-3 mb-md-4 mx-md-3">
+            <span class="text-primary">
+                <svg height="1.25em"
+                     role="img"
+                     viewBox="0 0 308.57998 308.57997"
+                     xmlns="http://www.w3.org/2000/svg">
+                    <title><?= lang('Common.software_title') . '&nbsp;' . lang('Common.logo') ?></title>
+                    <circle cx="154.28999"
+                            cy="154.28999"
+                            r="154.28999"
+                            fill="currentColor" />
+                    <path fill="#fff" d="M154.88998 145.66999c-.03-1.26-.03-3.29.19-4.29 4.6-11.1 15.57-18.82 28.3-18.82h.41v58.3c0 .12-.03.78-.04.9-.54 16.46-14.01 29.7-30.59 29.7v27.08c21 0 39.17-11.27 49.29-28.07l.07-.11c2.9.45 5.86.75 8.9.75 31.95 0 57.81-26 57.81-57.81 0-30.87-24.37-56.46-55.1-57.81h-30.74c-17.18 0-32.61 7.64-43.22 19.63-10.59-11.92-25.86-19.59-43.02-19.59-31.86 0-57.77 25.91-57.77 57.77 0 31.86 25.91 57.77 57.77 57.77 31.86 0 57.77-25.91 57.77-57.77v-3.68c-.01.01-.02-3.31-.03-3.95zm-57.75 38.33c-16.92 0-30.69-13.77-30.69-30.69s13.77-30.69 30.69-30.69 30.69 13.77 30.69 30.69-13.77 30.69-30.69 30.69zm142.96-19.87c-4.33 11.64-15.57 19.9-28.7 19.9h-.54v-61.47h.54c13.13 0 24.37 8.26 28.7 19.9 1.35 3.25 2.03 6.91 2.03 10.83s-.67 7.59-2.03 10.84z" />
+                </svg>
+            </span>
+
+        <span><?= lang('Common.software_title') ?></span>
+    </div>
+</footer>
+
+<?php if (ENVIRONMENT == 'development' || get_cookie('debug') == 'true' || $request->getGet('debug') == 'true') : ?>
+    <!-- inject:login:debug:js -->
+    <!-- endinject -->
+<?php else : ?>
+    <!-- inject:login:prod:js -->
+    <!-- endinject -->
+<?php endif; ?>
+
+<script src="resources/jquery-2c872dbe60.min.js"></script>
+
+<script>
+    // @noinspection JSInitializingVariableWithUndefined
+    const APP_STATE = {
+        isNewInstall: <?= $isNewInstall ? 'true' : 'false' ?>,
             isLatest: <?= $isLatest ? 'true' : 'false' ?>,
             csrfToken: '<?= csrf_token() ?>',
             csrfHash: '<?= csrf_hash() ?>',
@@ -201,127 +354,184 @@ $request = Services::request();
                 migrationCompleteLogin: <?= json_encode(lang('Login.migration_complete_login')) ?>,
                 migrationFailed: <?= json_encode(lang('Login.migration_failed')) ?>,
                 migrationErrorConnection: <?= json_encode(lang('Login.migration_error_connection')) ?>
-            }
-        };
+    }
+};
 
-        $(document).ready(function() {
-            const $form = $('#login-form');
-            const $heading = $('#form-heading');
-            const $warning = $('#migration-warning');
-            const $success = $('#migration-success');
-            const $progress = $('#migration-progress');
-            const $error = $('#migration-error');
-            const $errorMessage = $('#migration-error-message');
-            const $loginFields = $('#login-fields');
-            const $submitButton = $('#submit-button');
+$(document).ready(function() {
+    const $form = $('#login-form');
+    const $heading = $('#form-heading');
+    const $warning = $('#migration-warning');
+    const $success = $('#migration-success');
+    const $progress = $('#migration-progress');
+    const $error = $('#migration-error');
+    const $errorMessage = $('#migration-error-message');
+    const $loginFields = $('#login-fields');
+    const $submitButton = $('#submit-button');
 
-            function showMigrationRequired() {
-                if (APP_STATE.isNewInstall) {
-                    $heading.text(APP_STATE.i18n.initializationRequired);
-                    $submitButton.text(APP_STATE.i18n.initialize);
-                    $loginFields.addClass('d-none');
-                } else {
-                    $heading.text(APP_STATE.i18n.migrationRequired);
-                    $submitButton.text(APP_STATE.i18n.migrate);
-                    $loginFields.removeClass('d-none');
-                }
-                $warning.removeClass('d-none');
-                $success.addClass('d-none');
-                $progress.addClass('d-none');
-                $error.addClass('d-none');
-            }
+    /*
+     * Password show/hide functionality.
+     *
+     * Uses the password input immediately before the toggle
+     * button. This works for both supported login form layouts.
+     */
+    $('.password-toggle').on('click', function() {
+        const $button = $(this);
+        const $input = $button.siblings('input[name="password"]');
 
-            function showMigrationProgress() {
-                $warning.addClass('d-none');
-                $success.addClass('d-none');
-                $error.addClass('d-none');
-                $loginFields.addClass('d-none');
-                $progress.find('h3').text(APP_STATE.isNewInstall ? APP_STATE.i18n.migrationInitializing : APP_STATE.i18n.migratingDatabase);
-                $progress.removeClass('d-none');
-                $submitButton.prop('disabled', true);
-            }
+        if (!$input.length) {
+            return;
+        }
 
-            function showMigrationSuccess() {
-                $progress.addClass('d-none');
-                $error.addClass('d-none');
-                $warning.addClass('d-none');
-                $success.find('strong').text(APP_STATE.isNewInstall ? APP_STATE.i18n.migrationComplete : APP_STATE.i18n.migrationCompleteMigrate);
-                $success.removeClass('d-none');
-                $heading.text(APP_STATE.i18n.welcome);
-                $loginFields.removeClass('d-none');
-                $submitButton.text(APP_STATE.i18n.go);
-                $submitButton.prop('disabled', false);
-            }
+        const isPassword = $input.attr('type') === 'password';
 
-            function showMigrationError(message) {
-                $progress.addClass('d-none');
-                $success.addClass('d-none');
-                $errorMessage.text(message);
-                $error.removeClass('d-none');
-                $warning.addClass('d-none');
-                if (APP_STATE.isNewInstall) {
-                    $loginFields.addClass('d-none');
-                    $submitButton.text(APP_STATE.i18n.initialize);
-                } else {
-                    $loginFields.removeClass('d-none');
-                    $submitButton.text(APP_STATE.i18n.migrate);
-                }
-                $submitButton.prop('disabled', false);
-            }
+        $input.attr('type', isPassword ? 'text' : 'password');
 
-            function showLoginForm() {
-                $heading.text(APP_STATE.i18n.welcome);
-                $warning.addClass('d-none');
-                $progress.addClass('d-none');
-                $error.addClass('d-none');
-                $success.addClass('d-none');
-                $loginFields.removeClass('d-none');
-                $submitButton.text(APP_STATE.i18n.go);
-            }
+        $button.find('.eye-show').toggleClass('d-none', isPassword);
+        $button.find('.eye-hide').toggleClass('d-none', !isPassword);
 
-            if (!APP_STATE.isNewInstall && APP_STATE.isLatest) {
-                showLoginForm();
-            } else {
-                showMigrationRequired();
-            }
+        $button.attr(
+            'aria-label',
+            isPassword ? 'Hide password' : 'Show password'
+        );
 
-            $form.on('submit', function(e) {
-                if (APP_STATE.isNewInstall || !APP_STATE.isLatest) {
-                    e.preventDefault();
+        $button.attr(
+            'title',
+            isPassword ? 'Hide password' : 'Show password'
+        );
+    });
 
-                    showMigrationProgress();
+    function showMigrationRequired() {
+        if (APP_STATE.isNewInstall) {
+            $heading.text(APP_STATE.i18n.initializationRequired);
+            $submitButton.text(APP_STATE.i18n.initialize);
+            $loginFields.addClass('d-none');
+        } else {
+            $heading.text(APP_STATE.i18n.migrationRequired);
+            $submitButton.text(APP_STATE.i18n.migrate);
+            $loginFields.removeClass('d-none');
+        }
 
-                    $.ajax({
-                        url: APP_STATE.migrateUrl,
-                        type: 'POST',
-                        dataType: 'json',
-                        timeout: 3600000,
-                        data: {
-                            [APP_STATE.csrfToken]: APP_STATE.csrfHash,
-                            username: $('#input-username').val(),
-                            password: $('#input-password').val(),
-                        },
-                        success: function(response) {
-                            if (response.success) {
-                                APP_STATE.isNewInstall = false;
-                                APP_STATE.isLatest = true;
-                                showMigrationSuccess();
-                            } else {
-                                showMigrationError(response.message || APP_STATE.i18n.migrationFailed);
-                            }
-                        },
-                        error: function(xhr, status, error) {
-                            let message = APP_STATE.i18n.migrationErrorConnection;
-                            if (xhr.responseJSON && xhr.responseJSON.message) {
-                                message = xhr.responseJSON.message;
-                            }
-                            showMigrationError(message);
-                        }
-                    });
+        $warning.removeClass('d-none');
+        $success.addClass('d-none');
+        $progress.addClass('d-none');
+        $error.addClass('d-none');
+    }
+
+    function showMigrationProgress() {
+        $warning.addClass('d-none');
+        $success.addClass('d-none');
+        $error.addClass('d-none');
+        $loginFields.addClass('d-none');
+
+        $progress.find('h3').text(
+            APP_STATE.isNewInstall
+                ? APP_STATE.i18n.migrationInitializing
+                : APP_STATE.i18n.migratingDatabase
+        );
+
+        $progress.removeClass('d-none');
+        $submitButton.prop('disabled', true);
+    }
+
+    function showMigrationSuccess() {
+        $progress.addClass('d-none');
+        $error.addClass('d-none');
+        $warning.addClass('d-none');
+
+        $success.find('strong').text(
+            APP_STATE.isNewInstall
+                ? APP_STATE.i18n.migrationComplete
+                : APP_STATE.i18n.migrationCompleteMigrate
+        );
+
+        $success.removeClass('d-none');
+        $heading.text(APP_STATE.i18n.welcome);
+        $loginFields.removeClass('d-none');
+        $submitButton.text(APP_STATE.i18n.go);
+        $submitButton.prop('disabled', false);
+    }
+
+    function showMigrationError(message) {
+        $progress.addClass('d-none');
+        $success.addClass('d-none');
+        $errorMessage.text(message);
+        $error.removeClass('d-none');
+        $warning.addClass('d-none');
+
+        if (APP_STATE.isNewInstall) {
+            $loginFields.addClass('d-none');
+            $submitButton.text(APP_STATE.i18n.initialize);
+        } else {
+            $loginFields.removeClass('d-none');
+            $submitButton.text(APP_STATE.i18n.migrate);
+        }
+
+        $submitButton.prop('disabled', false);
+    }
+
+    function showLoginForm() {
+        $heading.text(APP_STATE.i18n.welcome);
+        $warning.addClass('d-none');
+        $progress.addClass('d-none');
+        $error.addClass('d-none');
+        $success.addClass('d-none');
+        $loginFields.removeClass('d-none');
+        $submitButton.text(APP_STATE.i18n.go);
+    }
+
+    if (!APP_STATE.isNewInstall && APP_STATE.isLatest) {
+        showLoginForm();
+    } else {
+        showMigrationRequired();
+    }
+
+    $form.on('submit', function(e) {
+        if (APP_STATE.isNewInstall || !APP_STATE.isLatest) {
+            e.preventDefault();
+
+            showMigrationProgress();
+
+            $.ajax({
+                url: APP_STATE.migrateUrl,
+                type: 'POST',
+                dataType: 'json',
+                timeout: 3600000,
+                data: {
+                    [APP_STATE.csrfToken]: APP_STATE.csrfHash,
+
+                    /*
+                     * Use name selectors instead of IDs.
+                     * This preserves the migration functionality
+                     * for both login form layouts.
+                     */
+                    username: $('input[name="username"]').val(),
+                    password: $('input[name="password"]').val(),
+                },
+                success: function(response) {
+                    if (response.success) {
+                        APP_STATE.isNewInstall = false;
+                        APP_STATE.isLatest = true;
+                        showMigrationSuccess();
+                    } else {
+                        showMigrationError(
+                            response.message || APP_STATE.i18n.migrationFailed
+                        );
+                    }
+                },
+                error: function(xhr, status, error) {
+                    let message = APP_STATE.i18n.migrationErrorConnection;
+
+                    if (xhr.responseJSON && xhr.responseJSON.message) {
+                        message = xhr.responseJSON.message;
+                    }
+
+                    showMigrationError(message);
                 }
             });
-        });
-    </script>
+        }
+    });
+});
+</script>
 </body>
 
 </html>

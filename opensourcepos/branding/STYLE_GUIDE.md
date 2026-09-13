@@ -1,7 +1,7 @@
 ## Style Guide
 
-Brand name: `Open Source Point of Sale`\
-Short name: `OSPOS`
+Brand name: `Point of Sale`\
+Short name: `CortexFlow POS`
 
 Font used for lettermark: `Helvetica Light`
 

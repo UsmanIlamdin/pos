@@ -73,7 +73,7 @@ return [
     "search"                         => "Traži",
     "search_options"                 => "Opcije pretrage",
     "searched_for"                   => "Traženo",
-    "software_short"                 => "OSPOS",
+    "software_short"                 => "CortexFlow POS",
     "software_title"                 => "Prodajno mjesto otvorenog koda",
     "state"                          => "Entitet",
     "submit"                         => "Prihvati",

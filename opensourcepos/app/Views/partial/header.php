@@ -42,7 +42,7 @@ $request = Services::request();
         <link rel="stylesheet" href="resources/css/ospos_print-bf10c1438b.css">
         <link rel="stylesheet" href="resources/css/ospos-d0b91fdf8f.css">
         <link rel="stylesheet" href="resources/css/popupbox-57d45cb822.css">
-        <link rel="stylesheet" href="resources/css/receipt-0606f1c54e.css">
+        <link rel="stylesheet" href="resources/css/receipt-de0ba907f4.css">
         <link rel="stylesheet" href="resources/css/register-e88ac141ce.css">
         <link rel="stylesheet" href="resources/css/reports-ace7faf688.css">
         <!-- endinject -->
@@ -58,6 +58,7 @@ $request = Services::request();
         <script src="resources/js/bootstrap-select-b01896a67b.js"></script>
         <script src="resources/js/bootstrap-table-bdb06552ea.js"></script>
         <script src="resources/js/bootstrap-table-export-6389dc2aa5.js"></script>
+        <script src="resources/js/bootstrap-table-filter-control-acd38a3ec5.js"></script>
         <script src="resources/js/bootstrap-table-mobile-fc655b68ab.js"></script>
         <script src="resources/js/bootstrap-table-sticky-header-cb4d83d172.js"></script>
         <script src="resources/js/moment-d65dc6d2e6.min.js"></script>
@@ -80,12 +81,12 @@ $request = Services::request();
         <script src="resources/js/bootstrap-toggle-1c7a19a049.js"></script>
         <script src="resources/js/clipboard-908af414ab.js"></script>
         <script src="resources/js/imgpreview-1db063409f.full.jquery.js"></script>
-        <script src="resources/js/manage_tables-9db1813775.js"></script>
+        <script src="resources/js/manage_tables-39a90f065a.js"></script>
         <script src="resources/js/nominatim-d187095956.autocomplete.js"></script>
         <!-- endinject -->
     <?php else : ?>
         <!--inject:prod:css -->
-        <link rel="stylesheet" href="resources/opensourcepos-c3c51fd7e7.min.css">
+        <link rel="stylesheet" href="resources/opensourcepos-aba7efbbec.min.css">
         <!-- endinject -->
 
         <!-- Tweaks to the UI for a particular theme should drop here  -->
@@ -94,7 +95,7 @@ $request = Services::request();
         <?php } ?>
         <!-- inject:prod:js -->
         <script src="resources/jquery-2c872dbe60.min.js"></script>
-        <script src="resources/opensourcepos-f26533fa83.min.js"></script>
+        <script src="resources/opensourcepos-6dd4000b69.min.js"></script>
         <!-- endinject -->
     <?php endif; ?>
 

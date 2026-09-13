@@ -73,7 +73,7 @@ return [
     "search"                         => "Sök",
     "search_options"                 => "Sökalternativ",
     "searched_for"                   => "Sök efter",
-    "software_short"                 => "OSPOS",
+    "software_short"                 => "CortexFlow POS",
     "software_title"                 => "Point of Sale med öppen källkod",
     "state"                          => "Län",
     "submit"                         => "Spara",
@@ -84,6 +84,6 @@ return [
     "welcome"                        => "Välkommen",
     "welcome_message"                => "Välkommen till OSPOS, klicka på en modul nedan för att komma igång.",
     "yes"                            => "Ja",
-    "you_are_using_ospos"            => "Du använder Open Source Point of Sale version",
+    "you_are_using_ospos"            => "Du använder CortexFlow Point of Sale version",
     "zip"                            => "Postnummer",
 ];

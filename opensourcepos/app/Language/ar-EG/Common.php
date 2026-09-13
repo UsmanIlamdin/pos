@@ -73,7 +73,7 @@ return [
     "search"                         => "بحث",
     "search_options"                 => "خيارات البحث",
     "searched_for"                   => "بحث عن",
-    "software_short"                 => "OSPOS",
+    "software_short"                 => "CortexFlow POS",
     "software_title"                 => "برنامج OSPOS",
     "state"                          => "المحافظة",
     "submit"                         => "حفظ",

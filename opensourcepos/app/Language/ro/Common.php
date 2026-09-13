@@ -84,6 +84,6 @@ return [
     "welcome"                        => "Bine ați venit",
     "welcome_message"                => "Bine ați venit la OSPOS, faceți clic pe un modul de mai jos pentru a începe.",
     "yes"                            => "",
-    "you_are_using_ospos"            => "Folosiți Open Source Point Of Sale versiunea",
+    "you_are_using_ospos"            => "Folosiți CortexFlow Point Of Sale versiunea",
     "zip"                            => "Cod poștal",
 ];

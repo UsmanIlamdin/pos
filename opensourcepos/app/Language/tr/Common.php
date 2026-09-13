@@ -73,7 +73,7 @@ return [
     "search"                         => "Arama",
     "search_options"                 => "Arama seçenekleri",
     "searched_for"                   => "Şu arandı:",
-    "software_short"                 => "OSPOS",
+    "software_short"                 => "CortexFlow POS",
     "software_title"                 => "Açık Kaynaklı Satış Noktası",
     "state"                          => "Bölge",
     "submit"                         => "Onayla",

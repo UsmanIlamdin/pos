@@ -73,7 +73,7 @@ return [
     'search' => "Cari",
     'search_options' => "Pilihan pencarian",
     'searched_for' => "Mencari untuk",
-    'software_short' => "OSPOS",
+    'software_short' => "CortexFlow POS",
     'software_title' => "Sumber Terbuka Titik Penjualan",
     'state' => "Provinsi",
     'submit' => "Kirim",

@@ -73,7 +73,7 @@ return [
     "search"                         => "Axtarış",
     "search_options"                 => "Axtarış variantları",
     "searched_for"                   => "Axtarıldı",
-    "software_short"                 => "OSPOS",
+    "software_short"                 => "CortexFlow POS",
     "software_title"                 => "Açıq mənbəli satış nöqtəsi",
     "state"                          => "Əyalət",
     "submit"                         => "Təsdiqlə",

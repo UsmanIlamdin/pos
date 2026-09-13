@@ -1,6 +1,6 @@
 # Agent Instructions
 
-This document provides guidance for AI agents working on the Open Source Point of Sale (OSPOS) codebase.
+This document provides guidance for AI agents working on the CortexFlow Point of Sale (OSPOS) codebase.
 
 ## Code Style
 

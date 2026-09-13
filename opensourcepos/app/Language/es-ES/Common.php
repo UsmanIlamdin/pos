@@ -73,7 +73,7 @@ return [
     "search"                         => "Buscar",
     "search_options"                 => "Opciones de búsqueda",
     "searched_for"                   => "Buscado",
-    "software_short"                 => "OSPOS",
+    "software_short"                 => "CortexFlow POS",
     "software_title"                 => "Punto de Venta Open Source",
     "state"                          => "Estado",
     "submit"                         => "Enviar",

@@ -51,8 +51,8 @@ FORCE_HTTPS = true
 First of all, if you're seeing the message `system folder missing` after launching your browser, that most likely means you have cloned the repository and have not built the project. To build the project from a source commit point instead of from an official release check out [Building OSPOS](BUILD.md). Otherwise, continue with the following steps.
 
 1. Download the a [pre-release for a specific branch](https://github.com/opensourcepos/opensourcepos/releases) or the latest stable [from GitHub here](https://github.com/opensourcepos/opensourcepos/releases). A repository clone will not work unless know how to build the project.
-2. Create/locate a new MySQL database to install Open Source Point of Sale into.
-3. Unzip and upload Open Source Point of Sale files to the web-server.
+2. Create/locate a new MySQL database to install CortexFlow Point of Sale into.
+3. Unzip and upload CortexFlow Point of Sale files to the web-server.
 4. If `.env` does not exist, copy `.env.example` to `.env`.
 5. Open `.env` and modify credentials to connect to your database if needed.
 6. The database schema will be automatically created when you first access the application. Migrations run automatically on fresh installs.

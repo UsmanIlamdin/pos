@@ -61,7 +61,7 @@ return [
     "search"                   => "گەڕان",
     "search_options"           => "هەڵبژاردەکانی گەڕان",
     "searched_for"             => "گەڕان بەدوای",
-    "software_short"           => "OSPOS",
+    "software_short"           => "CortexFlow POS",
     "software_title"           => "ئۆپن سۆڕس پۆینت ئۆف سەیڵ",
     "state"                    => "دۆخ",
     "submit"                   => "ناردن",

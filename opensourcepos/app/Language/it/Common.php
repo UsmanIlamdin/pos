@@ -73,7 +73,7 @@ return [
     "search"                         => "Cerca",
     "search_options"                 => "Opzioni di ricerca",
     "searched_for"                   => "Cercato per",
-    "software_short"                 => "OSPOS",
+    "software_short"                 => "CortexFlow POS",
     "software_title"                 => "Punto vendita Open Source",
     "state"                          => "Provincia",
     "submit"                         => "Invia",
@@ -84,6 +84,6 @@ return [
     "welcome"                        => "Benvenuto",
     "welcome_message"                => "Benvenuto in OSPOS, clicca un modulo sottostante per incominciare.",
     "yes"                            => "Sì",
-    "you_are_using_ospos"            => "Stai usando la versione Open Source Point Of Sale (Punto di vendita)",
+    "you_are_using_ospos"            => "Stai usando la versione CortexFlow Point Of Sale (Punto di vendita)",
     "zip"                            => "CAP",
 ];

@@ -73,7 +73,7 @@ You will receive a response within 48 hours. Confirmed vulnerabilities will be p
 
 ### No Bug Bounty Program
 
-**Important:** Open Source Point of Sale does not offer a bug bounty program.
+**Important:** CortexFlow Point of Sale does not offer a bug bounty program.
 
 - All security research and vulnerability triage is done on a **voluntary basis** in our free time
 - We do not offer monetary rewards for vulnerability reports
@@ -132,6 +132,6 @@ When creating a draft advisory, please include:
 
 ---
 
-**Thank you to all security researchers who have contributed to making Open Source Point of Sale more secure.** Your voluntary efforts help protect thousands of users worldwide and contribute to a safer, more trustworthy free and open-source software ecosystem. We deeply appreciate your responsible disclosure and the time you invest in improving our project.
+**Thank you to all security researchers who have contributed to making CortexFlow Point of Sale more secure.** Your voluntary efforts help protect thousands of users worldwide and contribute to a safer, more trustworthy free and open-source software ecosystem. We deeply appreciate your responsible disclosure and the time you invest in improving our project.
 
 If you've reported a vulnerability and would like to discuss CVE coordination or have questions about the process, please reach out to us at [jeroen@steganos.dev](mailto:jeroen@steganos.dev).

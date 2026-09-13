@@ -84,6 +84,6 @@ return [
     "welcome"                        => "ຍິນດີຕ້ອນຮັບ",
     "welcome_message"                => "ຍິນດີຕ້ອນຮັບສູ່ OSPOS, ກົດໂມເດວດ້ານລຸ່ມເພື່ອເລີ່ມ.",
     "yes"                            => "",
-    "you_are_using_ospos"            => "ທ່ານກຳລັງໃຊ້ Open Source Point Of Sale ເວີຊັ່ນ",
+    "you_are_using_ospos"            => "ທ່ານກຳລັງໃຊ້ CortexFlow Point Of Sale ເວີຊັ່ນ",
     "zip"                            => "ລະຫັດໄປສະນີ",
 ];

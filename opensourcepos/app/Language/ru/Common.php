@@ -84,6 +84,6 @@ return [
     "welcome"                        => "Добро пожаловать",
     "welcome_message"                => "Добро пожаловать в OSPOS, нажмите на модули ниже, чтобы начать.",
     "yes"                            => "",
-    "you_are_using_ospos"            => "Вы использоваете Open Source Point Of Sale Версия",
+    "you_are_using_ospos"            => "Вы использоваете CortexFlow Point Of Sale Версия",
     "zip"                            => "Почтовый индекс",
 ];

@@ -8,7 +8,7 @@ use CodeIgniter\Session\Handlers\DatabaseHandler;
 class App extends BaseConfig
 {
     /**
-     * This is the code version of the Open Source Point of Sale you're running.
+     * This is the code version of the CortexFlow Point of Sale you're running.
      *
      * @var string
      */

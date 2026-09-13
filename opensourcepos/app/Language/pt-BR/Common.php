@@ -84,6 +84,6 @@ return [
     'welcome' => "Bem-vindo",
     'welcome_message' => "Bem-vindo.",
     'yes' => "Sim",
-    'you_are_using_ospos' => "Você está usando Open Source Point Of Sale Versão",
+    'you_are_using_ospos' => "Você está usando CortexFlow Point Of Sale Versão",
     'zip' => "CEP",
 ];
