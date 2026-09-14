@@ -147,4 +147,5 @@ return [
     "work_orders"                             => "Arbeitsaufträge",
     "zero_and_less"                           => "Null und weniger",
     "toggle_cost_and_profit"                  => "Kosten & Gewinn umschalten",
+    "detailed_item_sales_report"              => "",
 ];

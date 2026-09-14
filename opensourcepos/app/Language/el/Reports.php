@@ -146,4 +146,5 @@ return [
     "used"                                    => "",
     "work_orders"                             => "",
     "zero_and_less"                           => "",
+    "detailed_item_sales_report"              => "",
 ];

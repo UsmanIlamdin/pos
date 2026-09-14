@@ -146,4 +146,5 @@ return [
     "used"                                    => "İstifadə edilən ballar",
     "work_orders"                             => "İstifadə Olunan Ballar",
     "zero_and_less"                           => "Sıfır və Aşağı",
+    "detailed_item_sales_report"              => "",
 ];

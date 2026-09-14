@@ -146,4 +146,5 @@ return [
     "used"                                    => "Points Used",
     "work_orders"                             => "Work Orders",
     "zero_and_less"                           => "Nula a méně",
+    "detailed_item_sales_report"              => "",
 ];

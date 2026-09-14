@@ -146,4 +146,5 @@ return [
     "used"                                    => "Korišćeni poeni",
     "work_orders"                             => "Radni nalozi",
     "zero_and_less"                           => "Nula i manje",
+    "detailed_item_sales_report"              => "",
 ];
