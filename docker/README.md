@@ -283,6 +283,22 @@ The app container waits for the DB health check to pass. Give it ~60 seconds on 
 docker inspect --format='{{.State.Health.Status}}' pos-app
 ```
 
+**Where are CodeIgniter logs?**
+They are bind-mounted to the host at:
+
+```text
+pos/opensourcepos/writable/logs/log-YYYY-MM-DD.log
+```
+
+Inside the container that is `/app/writable/logs`. In production, CI threshold is `4` (errors and above).
+
+**HTTP 500 with empty JSON body and no CI log?**
+That was caused by a poisoned CI4 `writable/cache/FactoriesCache_config` (OSPOS embeds a cache handler that cannot be `var_export`’d). The app source is not patched; Docker handles it via:
+
+- `docker/php/ci4-cache-guard.php` (`auto_prepend_file`) — drops a poisoned factories cache before boot
+- `docker/php/Optimize.php` mount — keeps config caching enabled without editing `opensourcepos/`
+- container start clears `FactoriesCache_config` / `FileLocatorCache`
+
 **Reset everything (⚠️ deletes all data):**
 ```bash
 docker compose --project-name pos down --volumes --rmi local

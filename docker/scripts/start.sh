@@ -19,6 +19,9 @@ mkdir -p "${DOCKER_DIR}/backups"
 # Ensure traefik log dir exists
 mkdir -p "${DOCKER_DIR}/traefik/logs"
 
+# CI4 FileHandler logs → host opensourcepos/writable/logs (bind-mounted)
+mkdir -p "${DOCKER_DIR}/../opensourcepos/writable/logs"
+
 chmod +x "${SCRIPT_DIR}/detect-lan-ip.sh" "${SCRIPT_DIR}/generate-certs.sh"
 
 echo "📡  Detecting LAN / Wi‑Fi IP…"

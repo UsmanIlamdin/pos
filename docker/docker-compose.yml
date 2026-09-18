@@ -20,8 +20,6 @@ volumes:
     driver: local
   app_uploads:
     driver: local
-  app_logs:
-    driver: local
   traefik_logs:
     driver: local
 
@@ -72,7 +70,8 @@ services:
         condition: service_healthy
     volumes:
       - app_uploads:/app/public/uploads
-      - app_logs:/app/writable/logs
+      # CI4 logs on the host (opensourcepos/writable/logs) — not a named Docker volume
+      - ../opensourcepos/writable/logs:/app/writable/logs
       # Live PHP application code (Controllers, Models, Views, …).
       # MUST map to /app/app — NOT /app.
       #   /app          = full project root (vendor/, public/, spark, …) from the image
@@ -81,6 +80,11 @@ services:
       # After rebuilding the image, re-sync gulp CSS/JS tags into header.php:
       #   ./scripts/sync-app-header.sh
       - ../opensourcepos/app:/app/app
+      # Docker-only CI4 cache guard (does not modify opensourcepos source)
+      - ./php/php.ini:/usr/local/etc/php/conf.d/app.ini:ro
+      - ./php/ci4-cache-guard.php:/usr/local/etc/php/ci4-cache-guard.php:ro
+      # Keep CI4 config caching enabled without editing opensourcepos/app/Config/Optimize.php
+      - ./php/Optimize.php:/app/app/Config/Optimize.php:ro
     environment:
       - CI_ENVIRONMENT=${CI_ENVIRONMENT:-production}
       - PHP_TIMEZONE=${PHP_TIMEZONE:-UTC}
@@ -105,6 +109,13 @@ services:
           echo \"encryption.key=hex2bin:$${KEY}\" >> /app/.env;
         fi;
       fi;
+      rm -f /app/writable/cache/FactoriesCache_config /app/writable/cache/FileLocatorCache;
+      if grep -q '^logger.threshold=' /app/.env; then
+        sed -i 's|^logger.threshold=.*|logger.threshold=4|' /app/.env;
+      else
+        echo 'logger.threshold=4' >> /app/.env;
+      fi;
+      mkdir -p /app/writable/logs && chown www-data:www-data /app/writable/logs && chmod 775 /app/writable/logs;
       apache2-foreground"
     labels:
       - "traefik.enable=true"

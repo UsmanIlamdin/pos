@@ -49,8 +49,6 @@
 
 /* First row */
 #logo {
-    text-align: right;
-    margin-top: 15px;
     float: left;
     position: relative;
     border: 1px solid #fff;

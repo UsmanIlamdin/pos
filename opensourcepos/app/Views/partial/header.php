@@ -38,11 +38,11 @@ $request = Services::request();
         <link rel="stylesheet" href="resources/css/bootstrap-tagsinput-5a6d46a06c.css">
         <link rel="stylesheet" href="resources/css/bootstrap-toggle-e12db6c1f3.css">
         <link rel="stylesheet" href="resources/css/bootstrap-4875cf7b0d.autocomplete.css">
-        <link rel="stylesheet" href="resources/css/invoice-a99a4dfac3.css">
+        <link rel="stylesheet" href="resources/css/invoice-4e88dbe73d.css">
         <link rel="stylesheet" href="resources/css/ospos_print-bf10c1438b.css">
         <link rel="stylesheet" href="resources/css/ospos-d0b91fdf8f.css">
         <link rel="stylesheet" href="resources/css/popupbox-57d45cb822.css">
-        <link rel="stylesheet" href="resources/css/receipt-de0ba907f4.css">
+        <link rel="stylesheet" href="resources/css/receipt-31c4101ff7.css">
         <link rel="stylesheet" href="resources/css/register-e88ac141ce.css">
         <link rel="stylesheet" href="resources/css/reports-ace7faf688.css">
         <!-- endinject -->
@@ -81,12 +81,12 @@ $request = Services::request();
         <script src="resources/js/bootstrap-toggle-1c7a19a049.js"></script>
         <script src="resources/js/clipboard-908af414ab.js"></script>
         <script src="resources/js/imgpreview-1db063409f.full.jquery.js"></script>
-        <script src="resources/js/manage_tables-39a90f065a.js"></script>
+        <script src="resources/js/manage_tables-b2e66a9f44.js"></script>
         <script src="resources/js/nominatim-d187095956.autocomplete.js"></script>
         <!-- endinject -->
     <?php else : ?>
         <!--inject:prod:css -->
-        <link rel="stylesheet" href="resources/opensourcepos-aba7efbbec.min.css">
+        <link rel="stylesheet" href="resources/opensourcepos-11f6626107.min.css">
         <!-- endinject -->
 
         <!-- Tweaks to the UI for a particular theme should drop here  -->
@@ -95,7 +95,7 @@ $request = Services::request();
         <?php } ?>
         <!-- inject:prod:js -->
         <script src="resources/jquery-2c872dbe60.min.js"></script>
-        <script src="resources/opensourcepos-6dd4000b69.min.js"></script>
+        <script src="resources/opensourcepos-5e0b020a10.min.js"></script>
         <!-- endinject -->
     <?php endif; ?>
 

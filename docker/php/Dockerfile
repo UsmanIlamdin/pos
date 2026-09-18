@@ -69,8 +69,9 @@ RUN { \
     echo 'opcache.enable_cli=0'; \
 } > /usr/local/etc/php/conf.d/opcache.ini
 
-# PHP runtime settings
+# PHP runtime settings + CI4 factories-cache guard (Docker-only; app source untouched)
 COPY docker/php/php.ini /usr/local/etc/php/conf.d/app.ini
+COPY docker/php/ci4-cache-guard.php /usr/local/etc/php/ci4-cache-guard.php
 
 # Apache vhost
 COPY docker/php/apache.conf /etc/apache2/sites-available/000-default.conf
