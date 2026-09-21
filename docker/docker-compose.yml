@@ -100,7 +100,16 @@ services:
       - FORCE_HTTPS=${FORCE_HTTPS:-true}
     command: >
       /bin/sh -c "SCHEME=$$( [ \"$${FORCE_HTTPS}\" = 'true' ] && echo https || echo http );
-      grep -q '^app.baseURL' /app/.env || echo \"app.baseURL='$${SCHEME}://$${APP_DOMAIN}/'\" >> /app/.env;
+      if grep -q '^app.baseURL=' /app/.env; then
+        sed -i \"s|^app.baseURL=.*|app.baseURL='$${SCHEME}://$${APP_DOMAIN}/'|\" /app/.env;
+      else
+        echo \"app.baseURL='$${SCHEME}://$${APP_DOMAIN}/'\" >> /app/.env;
+      fi;
+      if grep -q '^app.allowedHostnames=' /app/.env; then
+        sed -i \"s|^app.allowedHostnames=.*|app.allowedHostnames='$${ALLOWED_HOSTNAMES}'|\" /app/.env;
+      else
+        echo \"app.allowedHostnames='$${ALLOWED_HOSTNAMES}'\" >> /app/.env;
+      fi;
       if grep -Eq \"^encryption\\.key=(''|\\\"\\\" )?$$\" /app/.env || ! grep -q '^encryption.key=' /app/.env; then
         KEY=$$(openssl rand -hex 32);
         if grep -q '^encryption.key=' /app/.env; then
@@ -125,7 +134,8 @@ services:
       - "traefik.http.routers.app.tls=true"
       - "traefik.http.services.app.loadbalancer.server.port=80"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost/ || curl -sf http://localhost/ -o /dev/null -w '%{http_code}' | grep -qE '(200|301|302|404)'"]
+      # Use APP_DOMAIN Host header so healthchecks never pin baseURL to localhost
+      test: ["CMD-SHELL", "curl -sf -H \"Host: $${APP_DOMAIN:-localhost}\" http://127.0.0.1/ || curl -sf http://127.0.0.1/ -o /dev/null -w '%{http_code}' | grep -qE '(200|301|302|404)'"]
       interval: 30s
       timeout: 15s
       retries: 10

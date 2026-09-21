@@ -292,12 +292,16 @@ pos/opensourcepos/writable/logs/log-YYYY-MM-DD.log
 
 Inside the container that is `/app/writable/logs`. In production, CI threshold is `4` (errors and above).
 
-**HTTP 500 with empty JSON body and no CI log?**
-That was caused by a poisoned CI4 `writable/cache/FactoriesCache_config` (OSPOS embeds a cache handler that cannot be `var_export`’d). The app source is not patched; Docker handles it via:
+**HTTP 500 on `/reports` or CSP blocking `https://localhost/...` while using a custom domain?**
+CI4 config caching froze `baseURL` as `https://localhost/` (healthcheck Host) and crashed on save with circular references. Docker now:
 
-- `docker/php/ci4-cache-guard.php` (`auto_prepend_file`) — drops a poisoned factories cache before boot
-- `docker/php/Optimize.php` mount — keeps config caching enabled without editing `opensourcepos/`
-- container start clears `FactoriesCache_config` / `FileLocatorCache`
+- mounts `docker/php/Optimize.php` with **config caching disabled** (locator cache still on)
+- `docker/php/ci4-cache-guard.php` — strips any leftover poisoned `FactoriesCache_config`
+- start script always rewrites `app.baseURL` / `app.allowedHostnames` from `APP_DOMAIN`
+- healthcheck sends `Host: $APP_DOMAIN`
+
+Apply on a live stack without wiping the DB: see [APPLY-FIXES.md](./APPLY-FIXES.md).  
+To delete sales/items but keep employees: see [PURGE-TRANSACTIONAL-DATA.md](./PURGE-TRANSACTIONAL-DATA.md).
 
 **Reset everything (⚠️ deletes all data):**
 ```bash
