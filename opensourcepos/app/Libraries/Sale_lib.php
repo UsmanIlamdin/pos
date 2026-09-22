@@ -1069,13 +1069,20 @@ class Sale_lib
             }
 
             // If fixed discount then apply no more than the item price
-            if ($discount_type == FIXED) {    // TODO: === ?
-                if ($applied_discount > $price) {
-                    $applied_discount = $price;
-                    $discount -= $applied_discount;
+            // If fixed discount then apply no more than the item line total.
+            if ($discount_type == FIXED) {
+                $line_total = bcmul($quantity, $price);
+
+                if (bccomp($applied_discount, $line_total) > 0) {
+                    $discount_to_apply = $line_total;
+                    $discount = bcsub($discount, $discount_to_apply);
                 } else {
-                    $discount = 0;
+                    $discount_to_apply = $applied_discount;
+                    $discount = '0.0';
                 }
+
+                // The discount stored on a sales line is a per-unit discount.
+                $applied_discount = bcdiv($discount_to_apply, $quantity, 10);
             }
         }
 
