@@ -1230,7 +1230,8 @@ class Reports extends Secure_Controller
 
         $data = [];
         $data['specific_input_name'] = lang('Reports.customer');
-        $customers = [];
+        // Empty value = All Customers (default). Do not use 0 — that is not "all".
+        $customers = ['' => lang('Reports.all') . ' ' . lang('Reports.customers')];
         foreach ($this->customer->get_all()->getResult() as $customer) {
             if (isset($customer->company_name)) {
                 $customers[$customer->person_id] = $customer->first_name . ' ' . $customer->last_name . ' ' . ' [ ' . $customer->company_name . ' ] ';
@@ -1278,6 +1279,11 @@ class Reports extends Secure_Controller
     {
         $this->clearCache();
 
+        // URL sentinel "all" (and empty) means no customer filter — same dataset for report + export.
+        if ($customer_id === 'all' || $customer_id === '') {
+            $customer_id = '';
+        }
+
         $inputs = ['start_date' => $start_date, 'end_date' => $end_date, 'customer_id' => $customer_id, 'sale_type' => $sale_type, 'payment_type' => $payment_type];
 
         $specific_customer = model(Specific_customer::class);
@@ -1306,6 +1312,7 @@ class Reports extends Secure_Controller
                 'sale_time'     => to_datetime(strtotime($row['sale_time'])),
                 'quantity'      => to_quantity_decimals($row['items_purchased']),
                 'employee_name' => $row['employee_name'],
+                'customer_name' => $row['customer_name'],
                 'subtotal'      => to_currency($row['subtotal']),
                 'tax'           => to_currency_tax($row['tax']),
                 'total'         => to_currency($row['total']),
@@ -1348,14 +1355,16 @@ class Reports extends Secure_Controller
             }
         }
 
-        $customer_info = $this->customer->get_info($customer_id);
-        $customer_name = !empty($customer_info->company_name)    // TODO: This variable is not used anywhere in the code. Should it be or can it be deleted?
-            ? "[ $customer_info->company_name ]"
-            : $customer_info->company_name;
+        if ($customer_id === '') {
+            $title = lang('Reports.all') . ' ' . lang('Reports.customers') . ' ' . lang('Reports.report');
+        } else {
+            $customer_info = $this->customer->get_info((int) $customer_id);
+            $title = $customer_info->first_name . ' ' . $customer_info->last_name . ' ' . lang('Reports.report');
+        }
 
         // TODO: Duplicated Code
         $data = [
-            'title'                => $customer_info->first_name . ' ' . $customer_info->last_name . ' ' . lang('Reports.report'),
+            'title'                => $title,
             'subtitle'             => $this->_get_subtitle_report(['start_date' => $start_date, 'end_date' => $end_date]),
             'headers'              => $headers,
             'editable'             => 'sales',

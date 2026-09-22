@@ -35,6 +35,7 @@ class Specific_customer extends Report
                 ['sale_time'     => lang('Reports.date'), 'sortable' => false],
                 ['quantity'      => lang('Reports.quantity')],
                 ['employee_name' => lang('Reports.sold_by')],
+                ['customer_name' => lang('Reports.customer')],
                 ['subtotal'      => lang('Reports.subtotal'), 'sorter' => 'number_sorter'],
                 ['tax'           => lang('Reports.tax'), 'sorter' => 'number_sorter'],
                 ['total'         => lang('Reports.total'), 'sorter' => 'number_sorter'],
@@ -85,6 +86,7 @@ class Specific_customer extends Report
             MAX(sale_time) AS sale_time,
             SUM(quantity_purchased) AS items_purchased,
             MAX(employee_name) AS employee_name,
+            MAX(customer_name) AS customer_name,
             SUM(subtotal) AS subtotal,
             SUM(tax) AS tax,
             SUM(total) AS total,
@@ -93,51 +95,7 @@ class Specific_customer extends Report
             MAX(payment_type) AS payment_type,
             MAX(comment) AS comment');
 
-        $builder->where('customer_id', $inputs['customer_id']);    // TODO: Duplicated code
-
-        if ($inputs['payment_type'] == 'invoices') {
-            $builder->where('sale_type', SALE_TYPE_INVOICE);
-        } elseif ($inputs['payment_type'] != 'all') {
-            $builder->like('payment_type', lang('Sales.' . $inputs['payment_type']));
-        }
-
-        switch ($inputs['sale_type']) {
-            case 'complete':
-                $builder->where('sale_status', COMPLETED);
-                $builder->groupStart();
-                $builder->where('sale_type', SALE_TYPE_POS);
-                $builder->orWhere('sale_type', SALE_TYPE_INVOICE);
-                $builder->orWhere('sale_type', SALE_TYPE_RETURN);
-                $builder->groupEnd();
-                break;
-
-            case 'sales':
-                $builder->where('sale_status', COMPLETED);
-                $builder->groupStart();
-                $builder->where('sale_type', SALE_TYPE_POS);
-                $builder->orWhere('sale_type', SALE_TYPE_INVOICE);
-                $builder->groupEnd();
-                break;
-
-            case 'quotes':
-                $builder->where('sale_status', SUSPENDED);
-                $builder->where('sale_type', SALE_TYPE_QUOTE);
-                break;
-
-            case 'work_orders':
-                $builder->where('sale_status', SUSPENDED);
-                $builder->where('sale_type', SALE_TYPE_WORK_ORDER);
-                break;
-
-            case 'canceled':
-                $builder->where('sale_status', CANCELED);
-                break;
-
-            case 'returns':
-                $builder->where('sale_status', COMPLETED);
-                $builder->where('sale_type', SALE_TYPE_RETURN);
-                break;
-        }
+        $this->applyReportFilters($builder, $inputs);
 
         $builder->groupBy('sale_id');    // TODO: Duplicated code
         $builder->orderBy('MAX(sale_time)');
@@ -171,7 +129,60 @@ class Specific_customer extends Report
         $builder = $this->db->table('sales_items_temp');
         $builder->select('SUM(subtotal) AS subtotal, SUM(tax) AS tax, SUM(total) AS total, SUM(cost) AS cost, SUM(profit) AS profit');
 
-        $builder->where('customer_id', $inputs['customer_id']);    // TODO: Duplicate code
+        $this->applyReportFilters($builder, $inputs);
+
+        $summary = $builder->get()->getRowArray() ?? [
+            'subtotal' => 0,
+            'tax'      => 0,
+            'total'    => 0,
+            'cost'     => 0,
+            'profit'   => 0,
+        ];
+
+        $summary['trans_due'] = $this->getDueTotal($inputs);
+
+        return $summary;
+    }
+
+    /**
+     * Sum of Due payment amounts for sales matching the same report filters.
+     */
+    private function getDueTotal(array $inputs): float
+    {
+        $saleIdsBuilder = $this->db->table('sales_items_temp');
+        $saleIdsBuilder->distinct();
+        $saleIdsBuilder->select('sale_id');
+        $this->applyReportFilters($saleIdsBuilder, $inputs);
+        $saleIds = array_column($saleIdsBuilder->get()->getResultArray(), 'sale_id');
+
+        if ($saleIds === []) {
+            return 0.0;
+        }
+
+        $paymentsBuilder = $this->db->table('sales_payments');
+        $paymentsBuilder->select('SUM(payment_amount - cash_refund) AS due_total', false);
+        $paymentsBuilder->where('payment_type', lang('Sales.due'));
+        $paymentsBuilder->whereIn('sale_id', $saleIds);
+        $row = $paymentsBuilder->get()->getRowArray();
+
+        return (float) ($row['due_total'] ?? 0);
+    }
+
+    /**
+     * Shared customer / payment / sale-type filters for detail + summary queries.
+     *
+     * @param \CodeIgniter\Database\BaseBuilder $builder
+     */
+    private function applyReportFilters($builder, array $inputs): void
+    {
+        // Specific customer: filter to that id.
+        // All Customers (empty / "all"): every sale that has a customer — exclude walk-ins (NULL).
+        // Never use customer_id = 0 to mean "all".
+        if (isset($inputs['customer_id']) && $inputs['customer_id'] !== '' && $inputs['customer_id'] !== 'all') {
+            $builder->where('customer_id', $inputs['customer_id']);
+        } else {
+            $builder->where('customer_id IS NOT NULL', null, false);
+        }
 
         if ($inputs['payment_type'] == 'invoices') {
             $builder->where('sale_type', SALE_TYPE_INVOICE);
@@ -216,7 +227,5 @@ class Specific_customer extends Report
                 $builder->where('sale_type', SALE_TYPE_RETURN);
                 break;
         }
-
-        return $builder->get()->getRowArray();
     }
 }

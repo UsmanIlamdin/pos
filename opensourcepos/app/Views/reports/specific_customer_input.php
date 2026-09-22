@@ -68,7 +68,10 @@ if (isset($error)) {
         <?= view('partial/daterangepicker') ?>
 
         $("#generate_report").click(function() {
-            window.location = [window.location, start_date, end_date, $('#specific_input_data').val(), $("#input_type").val(), $('#input_payment_type').val() || 0].join("/");
+            // Empty dropdown value = All Customers; use "all" in the URL so the path has no empty segment.
+            // The model treats "" and "all" as no customer_id filter (never customer_id = 0).
+            const customerId = $('#specific_input_data').val() || 'all';
+            window.location = [window.location, start_date, end_date, customerId, $("#input_type").val(), $('#input_payment_type').val() || 0].join("/");
         });
 
     });
