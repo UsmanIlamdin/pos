@@ -51,5 +51,5 @@ The footer signatures with version, hash and URL link to the official website
 of the project MUST BE RETAINED, MUST BE VISIBLE IN EVERY PAGE and CANNOT BE
 MODIFIED.
 Footer signatures are in the format
-"© 2010 - current year · opensourcepos.org · version - commit"
+"© 2010 - current year · cortexflow.org · version - commit"
 or "CortexFlow Point of Sale".

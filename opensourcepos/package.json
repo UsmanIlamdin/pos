@@ -6,9 +6,9 @@
         "point-of-sale",
         "POS"
     ],
-    "homepage": "https://opensourcepos.org",
+    "homepage": "https://cortexflow.org",
     "bugs": {
-        "url": "https://github.com/opensourcepos/opensourcepos/issues"
+        "url": "https://github.com/UsmanIlamdin/pos/issues"
     },
     "repository": {
         "type": "git",
@@ -16,7 +16,7 @@
     },
     "license": "MIT",
     "contributors": [
-        "jekkos <jekkos - at - opensourcepos.org>",
+        "jekkos <jekkos - at - cortexflow.org>",
         "objecttothis <objecttothis - at - gmail.com>"
     ],
     "files": [

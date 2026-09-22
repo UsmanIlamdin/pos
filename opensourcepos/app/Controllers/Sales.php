@@ -1205,6 +1205,8 @@ class Sales extends Secure_Controller
         $sale_info = $this->sale->get_info($sale_id)->getRowArray();
         $this->sale_lib->copy_entire_sale($sale_id);
         $data = [];
+        $data['print_filename'] = $sale_id . '_' . date('Y-m-d', strtotime($sale_info['sale_time']));
+
         $data['cart'] = $this->sale_lib->get_cart();
         $data['payments'] = $this->sale_lib->getPayments();
         $data['selected_payment_type'] = $this->sale_lib->get_payment_type();

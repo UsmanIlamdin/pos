@@ -11,7 +11,7 @@
 <a href="https://github.com/opensourcepos/opensourcepos/actions/workflows/build-release.yml" target="_blank"><img src="https://github.com/opensourcepos/opensourcepos/actions/workflows/build-release.yml/badge.svg" alt="Build Status"></a>
 <a href="https://app.gitter.im/#/room/#opensourcepos_Lobby:gitter.im?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge" target="_blank"><img src="https://badges.gitter.im/jekkos/opensourcepos.svg" alt="Join the chat at https://app.gitter.im"></a>
 <a href="https://badge.fury.io/gh/opensourcepos%2Fopensourcepos" target="_blank"><img src="https://badge.fury.io/gh/opensourcepos%2Fopensourcepos.svg" alt="Project Version"></a>
-<a href="https://translate.opensourcepos.org/engage/opensourcepos/?utm_source=widget" target="_blank"><img src="https://translate.opensourcepos.org/widgets/opensourcepos/-/svg-badge.svg" alt="Translation Status"></a>
+<a href="https://translate.cortexflow.org/engage/opensourcepos/?utm_source=widget" target="_blank"><img src="https://translate.cortexflow.org/widgets/opensourcepos/-/svg-badge.svg" alt="Translation Status"></a>
 </p>
 
 ## 👋 Introduction
@@ -48,15 +48,15 @@ The features include:
 
 We've got a live version of our latest master running for you to play around with and test everything out. It's a containerized install that will reinitialize when new functionality is merged into our code repository.
 
-You can [find the demo here](https://demo.opensourcepos.org/) and log in with these credentials.  
+You can [find the demo here](https://demo.cortexflow.org/) and log in with these credentials.  
 👤 Username `admin`  
 🔒 Password `pointofsale`
 
-If you bump into an issue, please check [the status page here](https://status.opensourcepos.org/) to confirm if the server is up and running.
+If you bump into an issue, please check [the status page here](https://status.cortexflow.org/) to confirm if the server is up and running.
 
 ## 🖥️ Development Demo
 
-Besides the demo of the latest master, we also have a development server that builds when there's a new commit to our repository. It's mainly used for testing out new code before merging it into the master. [It can be found here](https://dev.opensourcepos.org/).
+Besides the demo of the latest master, we also have a development server that builds when there's a new commit to our repository. It's mainly used for testing out new code before merging it into the master. [It can be found here](https://dev.cortexflow.org/).
 
 The log in credentials are the same as the regular live demo.
 
@@ -92,7 +92,7 @@ WHERE username = 'usman';
 
 Everyone is more than welcome to help us improve this project. If you think you've got something to help us go forward, feel free to open a [pull request]() or join the conversation on [Element](https://app.gitter.im/#/room/#opensourcepos_Lobby:gitter.im).
 
-Want to help translate CortexFlow Point of Sale in your language? You can find [our Weblate here](https://translate.opensourcepos.org), sign up, and start translating. You can subscribe to different languages to receive a notification once a new string is added or needs updating. Have a look at our [guidelines](https://github.com/opensourcepos/opensourcepos/wiki/Adding-translations) below to help you get started.
+Want to help translate CortexFlow Point of Sale in your language? You can find [our Weblate here](https://translate.cortexflow.org), sign up, and start translating. You can subscribe to different languages to receive a notification once a new string is added or needs updating. Have a look at our [guidelines](https://github.com/opensourcepos/opensourcepos/wiki/Adding-translations) below to help you get started.
 
 Only with the help of the community, we can keep language translations up to date. Thanks!
 
@@ -135,7 +135,7 @@ usman@usmanilamdin:~/Sites/pos/opensourcepos$ docker run --rm -v $(pwd):/app -w 
 
 CortexFlow Point of Sale is licensed under MIT terms with an important addition:
 
-The footer signature "© 2010 - _current year_ · opensourcepos.org · 3.x.x - _hash_" including the version, hash and link to our website MUST BE RETAINED, MUST BE VISIBLE IN EVERY PAGE and CANNOT BE MODIFIED.
+The footer signature "© 2010 - _current year_ · cortexflow.org · 3.x.x - _hash_" including the version, hash and link to our website MUST BE RETAINED, MUST BE VISIBLE IN EVERY PAGE and CANNOT BE MODIFIED.
 
 Also worth noting:
 

@@ -15,13 +15,13 @@
             "name": "objecttothis"
         }
     ],
-    "homepage": "https://opensourcepos.org",
+    "homepage": "https://cortexflow.org",
     "support": {
-        "issues": "https://github.com/opensourcepos/opensourcepos/issues",
-        "forum": "https://github.com/opensourcepos/opensourcepos/discussions",
-        "wiki": "https://github.com/opensourcepos/opensourcepos/wiki",
-        "source": "https://github.com/opensourcepos/opensourcepos",
-        "docs": "https://github.com/opensourcepos/opensourcepos/wiki#documentation",
+        "issues": "https://github.com/UsmanIlamdin/pos/issues",
+        "forum": "https://github.com/UsmanIlamdin/pos/discussions",
+        "wiki": "https://github.com/UsmanIlamdin/pos/wiki",
+        "source": "https://github.com/UsmanIlamdin/pos",
+        "docs": "https://github.com/UsmanIlamdin/pos/wiki#documentation",
         "matrix": "https://matrix.to/#/#opensourcepos_Lobby:gitter.im"
     },
     "require": {

@@ -80,7 +80,7 @@ return [
     "total_spent"                    => "ยอดสั่งซื้อทั้งหมด",
     "unknown"                        => "ไม่ทราบ",
     "view_recent_sales"              => "การขายล่าสุด",
-    "website"                        => "เว็บไซต์ opensourcepos.org",
+    "website"                        => "เว็บไซต์ cortexflow.org",
     "welcome"                        => "ยินดีต้อนรับ",
     "welcome_message"                => "ยินดีต้อนรับสู่ OSPOS, กรุณาเลือกโมดูลด้านล่างที่ต้องการทำงาน",
     "yes"                            => "ใช่",

@@ -80,7 +80,7 @@ return [
     "total_spent"                    => "மொத்த செலவு",
     "unknown"                        => "தெரியவில்லை",
     "view_recent_sales"              => "சமீபத்திய விற்பனையைக் காண்க",
-    "website"                        => "opensourcepos.org வலைத்தளம்",
+    "website"                        => "cortexflow.org வலைத்தளம்",
     "welcome"                        => "வரவேற்கிறோம்",
     "welcome_message"                => "OSPOS க்கு வருக, தொடங்குவதற்கு கீழே உள்ள ஒரு தொகுதியைக் கிளிக் செய்க.",
     "yes"                            => "",

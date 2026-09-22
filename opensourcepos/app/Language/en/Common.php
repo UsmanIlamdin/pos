@@ -82,7 +82,7 @@ return [
     "true"                           => "True",
     "unknown"                        => "Unknown",
     "view_recent_sales"              => "View Recent Sales",
-    "website"                        => "opensourcepos.org",
+    "website"                        => "cortexflow.org",
     "welcome"                        => "Welcome",
     "welcome_message"                => "Welcome to CortexFlow POS, click a module below to get started.",
     "yes"                            => "Yes",

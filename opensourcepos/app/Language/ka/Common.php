@@ -80,7 +80,7 @@ return [
     "total_spent"                    => "Total Spent",
     "unknown"                        => "უცნობი",
     "view_recent_sales"              => "View Recent Sales",
-    "website"                        => "opensourcepos.org",
+    "website"                        => "cortexflow.org",
     "welcome"                        => "მოგესალმებით",
     "welcome_message"                => "Welcome to Cortex POS, click a module below to get started.",
     "yes"                            => "დიახ",
