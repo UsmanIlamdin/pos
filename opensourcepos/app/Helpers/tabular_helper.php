@@ -49,7 +49,7 @@ function transform_headers(array $headers, bool $readonly = false, bool $editabl
             'field'      => key($element),
             'title'      => current($element),
             'switchable' => $element['switchable'] ?? !preg_match('(^$|&nbsp)', current($element)),
-            'escape'     => !preg_match("/(edit|email|messages|item_pic)/", key($element)) && !(isset($element['escape']) && !$element['escape']),
+            'escape'     => !preg_match("/(edit|email|messages|item_pic|account|start_return|invoice|receipt)/", key($element)) && !(isset($element['escape']) && !$element['escape']),
             'sortable'   => $element['sortable'] ?? current($element) != '',
             'checkbox'   => $element['checkbox'] ?? false,
             'class'      => isset($element['checkbox']) || preg_match('(^$|&nbsp)', current($element)) ? 'print_hide' : '',
@@ -129,10 +129,11 @@ function salesHeaders(): array
         ['sale_id'         => lang('Common.id')],
         ['sale_time'       => lang('Sales.sale_time')],
         ['customer_name'   => lang('Customers.customer')],
-        ['amount_due'      => lang('Sales.amount_due')],
-        ['amount_tendered' => lang('Sales.amount_tendered')],
-        ['change_due'      => lang('Sales.change_due')],
-        ['payment_type'    => lang('Sales.payment_type')]
+        ['sale_total'      => lang('Accounts.sale_total')],
+        ['payments'        => lang('Accounts.payments_applied'), 'sortable' => false],
+        ['credits_returns' => lang('Accounts.credits_returns'), 'sortable' => false],
+        ['balance'         => lang('Accounts.balance'), 'sortable' => false],
+        ['pay_status'      => lang('Accounts.status'), 'sortable' => false],
     ];
 }
 
@@ -150,6 +151,7 @@ function get_sales_manage_table_headers(): string
     }
 
     $headers[] = ['receipt' => '', 'sortable' => false, 'escape' => false];
+    $headers[] = ['start_return' => '', 'sortable' => false, 'escape' => false];
 
     return transform_headers($headers);
 }
@@ -165,11 +167,12 @@ function getSaleDataRow(object $sale): array
     $row = [
         'sale_id'         => $sale->sale_id,
         'sale_time'       => to_datetime(strtotime($sale->sale_time)),
-        'customer_name'   => $sale->customer_name,
-        'amount_due'      => to_currency($sale->amount_due),
-        'amount_tendered' => to_currency($sale->amount_tendered),
-        'change_due'      => to_currency($sale->change_due),
-        'payment_type'    => $sale->payment_type
+        'customer_name'   => $sale->customer_name ?: (lang('Common.none') . ' '),
+        'sale_total'      => to_currency(property_exists($sale, 'sale_total') ? $sale->sale_total : $sale->amount_due),
+        'payments'        => to_currency(property_exists($sale, 'payments_applied') ? $sale->payments_applied : 0),
+        'credits_returns' => to_currency(property_exists($sale, 'credits_returns') ? $sale->credits_returns : 0),
+        'balance'         => to_currency(property_exists($sale, 'balance') ? $sale->balance : (property_exists($sale, 'balance_due') ? $sale->balance_due : 0)),
+        'pay_status'      => property_exists($sale, 'pay_status_label') ? $sale->pay_status_label : '',
     ];
 
     $config = config(OSPOS::class)->settings;
@@ -190,6 +193,16 @@ function getSaleDataRow(object $sale): array
         '<span class="glyphicon glyphicon-usd"></span>',
         ['title' => lang('Sales.show_receipt')]
     );
+
+    $isReturnSale = property_exists($sale, 'sale_type') && (int) $sale->sale_type === SALE_TYPE_RETURN;
+    $row['start_return'] = ($isReturnSale || (string) $sale->sale_id === '-')
+        ? '-'
+        : anchor(
+            "$controller/startReturn/$sale->sale_id",
+            '<span class="glyphicon glyphicon-share-alt"></span>',
+            ['title' => lang('Sales.start_return'), 'class' => 'print_hide']
+        );
+
     $row['edit'] = anchor(
         "$controller/edit/$sale->sale_id",
         '<span class="glyphicon glyphicon-edit"></span>',
@@ -209,40 +222,57 @@ function getSaleDataRow(object $sale): array
  */
 function getSaleDataLastRow(ResultInterface $sales): array
 {
-    $sum_amount_due = 0;
-    $sum_amount_tendered = 0;
-    $sum_change_due = 0;
+    $sum_sale_total = 0.0;
+    $sum_payments = 0.0;
+    $sum_credits = 0.0;
+    $sum_balance = 0.0;
 
-    foreach ($sales->getResult() as $key => $sale) {
-        $sum_amount_due += $sale->amount_due;
-        $sum_amount_tendered += $sale->amount_tendered;
-        $sum_change_due += $sale->change_due;
+    foreach ($sales->getResult() as $sale) {
+        $sum_sale_total += property_exists($sale, 'sale_total') ? (float) $sale->sale_total : (float) $sale->amount_due;
+        $sum_payments += property_exists($sale, 'payments_applied') ? (float) $sale->payments_applied : 0.0;
+        $sum_credits += property_exists($sale, 'credits_returns') ? (float) $sale->credits_returns : 0.0;
+        $sum_balance += property_exists($sale, 'balance')
+            ? (float) $sale->balance
+            : (property_exists($sale, 'balance_due') ? (float) $sale->balance_due : 0.0);
     }
 
     return [
         'sale_id'         => '-',
-        'sale_time'       => lang('Sales.total'),
-        'amount_due'      => to_currency($sum_amount_due),
-        'amount_tendered' => to_currency($sum_amount_tendered),
-        'change_due'      => to_currency($sum_change_due)
+        'sale_time'       => lang('Sales.total') . ' (page)',
+        'customer_name'   => '',
+        'sale_total'      => to_currency($sum_sale_total),
+        'payments'        => to_currency($sum_payments),
+        'credits_returns' => to_currency($sum_credits),
+        'balance'         => to_currency($sum_balance),
+        'pay_status'      => '',
     ];
 }
 
 /**
- * Get the sales payments summary
+ * Get the sales payments summary (excludes Due placeholders; shows AR outstanding when provided).
+ *
+ * @param list<array{payment_type:string, payment_amount:float|string}> $payments
  */
-function getSalesManagePaymentsSummary(array $payments): string
+function getSalesManagePaymentsSummary(array $payments, ?float $outstandingTotal = null): string
 {
     $table = '<div id="report_summary">';
     $total = 0;
+    $accountLib = new \App\Libraries\Customer_account_lib();
 
-    foreach ($payments as $key => $payment) {
+    foreach ($payments as $payment) {
+        $type = (string) ($payment['payment_type'] ?? '');
+        if ($accountLib->isDuePaymentType($type)) {
+            continue;
+        }
         $amount = $payment['payment_amount'];
-        $total = bcadd($total, $amount);
-        $table .= '<div class="summary_row">' . $payment['payment_type'] . ': ' . to_currency($amount) . '</div>';
+        $total = bcadd((string) $total, (string) $amount, totals_decimals());
+        $table .= '<div class="summary_row">' . esc($type) . ': ' . to_currency($amount) . '</div>';
     }
 
     $table .= '<div class="summary_row">' . lang('Sales.total') . ': ' . to_currency($total) . '</div>';
+    if ($outstandingTotal !== null) {
+        $table .= '<div class="summary_row">' . lang('Accounts.outstanding_balance') . ': ' . to_currency($outstandingTotal) . '</div>';
+    }
     $table .= '</div>';
 
     return $table;
@@ -322,7 +352,8 @@ function customer_headers(): array
         ['first_name'       => lang('Common.first_name')],
         ['email'            => lang('Common.email')],
         ['phone_number'     => lang('Common.phone_number')],
-        ['total'            => lang('Common.total_spent'), 'sortable' => false]
+        ['total'            => lang('Common.total_spent'), 'sortable' => false],
+        ['total_due'        => lang('Common.total_due'), 'sortable' => false],
     ];
 }
 
@@ -335,6 +366,10 @@ function get_customer_manage_table_headers(): string
 
     $employee = model(Employee::class);
     $session = session();
+
+    if ($employee->has_grant('accounts', $session->get('person_id'))) {
+        $headers[] = ['account' => '', 'sortable' => false];
+    }
 
     if ($employee->has_grant('messages', $session->get('person_id'))) {
         $headers[] = ['messages' => '', 'sortable' => false];
@@ -349,14 +384,18 @@ function get_customer_manage_table_headers(): string
 function get_customer_data_row(object $person, object $stats): array
 {
     $controller = get_controller();
+    $totalDue = property_exists($stats, 'total_due')
+        ? (float) $stats->total_due
+        : (new \App\Libraries\Customer_account_lib())->getCustomerOutstanding((int) $person->person_id);
 
-    return [
+    $row = [
         'people.person_id' => $person->person_id,
         'last_name'        => $person->last_name,
         'first_name'       => $person->first_name,
         'email'            => empty($person->email) ? '' : mailto(esc($person->email), esc($person->email)),
         'phone_number'     => $person->phone_number,
         'total'            => to_currency($stats->total),
+        'total_due'        => to_currency($totalDue),
         'messages'         => empty($person->phone_number)
             ? ''
             : anchor(
@@ -376,8 +415,20 @@ function get_customer_data_row(object $person, object $stats): array
                 'data-btn-submit' => lang('Common.submit'),
                 'title'           => lang(ucfirst($controller) . ".update")
             ]
-        )
+        ),
     ];
+
+    $employee = model(\App\Models\Employee::class);
+    $session = session();
+    if ($employee->has_grant('accounts', $session->get('person_id'))) {
+        $row['account'] = anchor(
+            "accounts/view/$person->person_id",
+            '<span class="glyphicon glyphicon-folder-open"></span>',
+            ['title' => lang('Accounts.view_account')]
+        );
+    }
+
+    return $row;
 }
 
 function supplier_headers(): array

@@ -4,6 +4,7 @@ namespace App\Libraries;
 
 use Config\OSPOS;
 use Exception;
+use Picqer\Barcode\BarcodeGeneratorPNG;
 use Picqer\Barcode\BarcodeGeneratorSVG;
 
 /**
@@ -120,16 +121,28 @@ class Barcode_lib
     }
 
     /**
+     * Receipt/invoice barcode as a PNG <img> so browser print and Dompdf render reliably.
+     * (Raw SVG with XML declarations often fails to print or embed.)
+     *
      * @param $barcode_content
      * @return string
      */
     public function generate_receipt_barcode($barcode_content): string
     {
         try {
-            $generator = new BarcodeGeneratorSVG();
-            return $generator->getBarcode($barcode_content, $generator::TYPE_CODE_128);
+            $content = preg_replace('/\s+/', ' ', trim((string) $barcode_content)) ?? '';
+            if ($content === '') {
+                return '';
+            }
+
+            $generator = new BarcodeGeneratorPNG();
+            $png = $generator->getBarcode($content, $generator::TYPE_CODE_128, 2, 60);
+
+            return '<img class="receipt-barcode" alt="' . htmlspecialchars($content, ENT_QUOTES, 'UTF-8') . '" src="data:image/png;base64,'
+                . base64_encode($png)
+                . '" style="max-width:280px;height:auto;image-rendering:pixelated;-webkit-print-color-adjust:exact;print-color-adjust:exact;" />';
         } catch (Exception $e) {
-            echo 'Caught exception: ', $e->getMessage(), "\n";
+            log_message('error', 'Barcode generation failed: ' . $e->getMessage());
             return '';
         }
     }

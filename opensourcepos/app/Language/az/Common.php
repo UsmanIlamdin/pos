@@ -86,4 +86,5 @@ return [
     "yes"                            => "",
     "you_are_using_ospos"            => "Açıq Layihədə Satışın Avtomatlaşdırma Nöqtəsi versiya",
     "zip"                            => "Poçt Kodu",
+    "none"                           => "Walk In",
 ];

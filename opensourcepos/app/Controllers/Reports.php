@@ -83,7 +83,7 @@ class Reports extends Secure_Controller
         $this->inventory_summary = model(Inventory_summary::class);
 
         if (sizeof($exploder) > 1) {
-            preg_match('/(?:inventory)|([^_.]*)(?:_graph|_row)?$/', $methodName, $matches);
+            preg_match('/(?:inventory)|(?:accounts)|([^_.]*)(?:_graph|_row)?$/', $methodName, $matches);
             preg_match('/^(.*?)([sy])?$/', array_pop($matches), $matches);
             $submoduleId = $matches[1] . ((count($matches) > 2) ? $matches[2] : 's');
         } else {
@@ -1279,7 +1279,6 @@ class Reports extends Secure_Controller
     {
         $this->clearCache();
 
-        // URL sentinel "all" (and empty) means no customer filter — same dataset for report + export.
         if ($customer_id === 'all' || $customer_id === '') {
             $customer_id = '';
         }
@@ -2225,5 +2224,87 @@ class Reports extends Secure_Controller
         ];
 
         return view('reports/tabular', $data);
+    }
+
+    /**
+     * Customer account statement input (pick a customer or all).
+     */
+    public function accounts_statement(): string
+    {
+        $this->clearCache();
+
+        // Empty value = All Customers (same pattern as specific_customers report).
+        $customers = ['' => lang('Reports.all') . ' ' . lang('Reports.customers')];
+        foreach ($this->customer->get_all()->getResult() as $customer) {
+            if (isset($customer->company_name) && $customer->company_name !== '') {
+                $customers[$customer->person_id] = $customer->first_name . ' ' . $customer->last_name . ' [ ' . $customer->company_name . ' ]';
+            } else {
+                $customers[$customer->person_id] = $customer->first_name . ' ' . $customer->last_name;
+            }
+        }
+
+        return view('reports/accounts_statement_input', [
+            'specific_input_name' => lang('Reports.customer'),
+            'specific_input_data' => $customers,
+        ]);
+    }
+
+    /**
+     * Render customer account statement (one customer or all).
+     *
+     * @param string $customerId Numeric person_id, or "all"/empty for every customer
+     */
+    public function accounts_statement_view(string $customerId = 'all'): string
+    {
+        $this->clearCache();
+
+        if ($customerId === '' || $customerId === 'all') {
+            $customerId = 'all';
+        }
+
+        $report = model(\App\Models\Reports\Account_receivables::class);
+
+        if ($customerId === 'all') {
+            $result = $report->getAccountStatementAll();
+
+            return view('reports/tabular', [
+                'title'        => lang('Reports.account_statement'),
+                'subtitle'     => lang('Reports.all') . ' ' . lang('Reports.customers'),
+                'headers'      => $result['headers'],
+                'data'         => $result['data'],
+                'summary_data' => $result['summary_data'],
+            ]);
+        }
+
+        $personId = (int) $customerId;
+        $result = $report->getAccountStatement($personId);
+        $customer = $this->customer->get_info($personId);
+
+        return view('reports/tabular', [
+            'title'        => lang('Reports.account_statement'),
+            'subtitle'     => $customer->first_name . ' ' . $customer->last_name,
+            'headers'      => $result['headers'],
+            'data'         => $result['data'],
+            'summary_data' => $result['summary_data'],
+        ]);
+    }
+
+    /**
+     * Customers with outstanding balances.
+     */
+    public function accounts_balance(): string
+    {
+        $this->clearCache();
+
+        $report = model(\App\Models\Reports\Account_receivables::class);
+        $result = $report->getCustomersBalance();
+
+        return view('reports/tabular', [
+            'title'        => lang('Reports.customers_balance_report'),
+            'subtitle'     => '',
+            'headers'      => $result['headers'],
+            'data'         => $result['data'],
+            'summary_data' => $result['summary_data'],
+        ]);
     }
 }

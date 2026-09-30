@@ -176,4 +176,27 @@ const DEFAULT_LANGUAGE_CODE = 'en';
 /**
  * Admin modules - list of modules required for admin privileges
  */
-const ADMIN_MODULES = ['customers', 'employees', 'giftcards', 'items', 'item_kits', 'messages', 'receivings', 'reports', 'sales', 'config', 'suppliers'];
+const ADMIN_MODULES = ['customers', 'employees', 'giftcards', 'items', 'item_kits', 'messages', 'receivings', 'reports', 'sales', 'config', 'suppliers', 'accounts'];
+
+/**
+ * Consolidated invoice statuses
+ */
+const CI_STATUS_DRAFT = 0;
+const CI_STATUS_OPEN = 1;
+const CI_STATUS_PARTIALLY_PAID = 2;
+const CI_STATUS_PAID = 3;
+const CI_STATUS_CANCELLED = 4;
+
+/**
+ * Customer account payment / allocation / credit statuses
+ */
+const CA_STATUS_ACTIVE = 1;
+const CA_STATUS_VOIDED = 2;
+
+/**
+ * Sale receivable payment status labels (Sales History / Edit Sale)
+ */
+const SALE_PAY_STATUS_CANCELLED = 'cancelled';
+const SALE_PAY_STATUS_PAID = 'paid';
+const SALE_PAY_STATUS_UNPAID = 'unpaid';
+const SALE_PAY_STATUS_PARTIAL = 'partially_paid';

@@ -14,10 +14,23 @@ class MY_Migration extends MigrationRunner
      */
     public function isLatest(): bool
     {
-        $latestVersion = $this->getLatestMigration();
-        $currentVersion = $this->getCurrentVersion();
+        $latestVersion = (string) $this->getLatestMigration();
+        $currentVersion = self::getCurrentVersion();
 
-        return $latestVersion === $currentVersion;
+        if ($currentVersion === null) {
+            return false;
+        }
+
+        $current = (string) $currentVersion;
+
+        // Stale FileLocatorCache can hide newly added migration files so "latest"
+        // looks older than the DB. Refresh once and re-check.
+        if ($latestVersion !== '0' && strcmp($current, $latestVersion) > 0) {
+            $this->clearFileLocatorCache();
+            $latestVersion = (string) $this->getLatestMigration();
+        }
+
+        return $latestVersion === $current;
     }
 
     /**
@@ -26,7 +39,20 @@ class MY_Migration extends MigrationRunner
     public function getLatestMigration(): int
     {
         $migrations = $this->findMigrations();
-        return (int) basename(end($migrations)->version);
+        if ($migrations === []) {
+            return 0;
+        }
+
+        // Prefer string compare of YmdHis versions (avoid int cast edge cases).
+        $latest = '0';
+        foreach ($migrations as $migration) {
+            $version = preg_replace('/[^0-9]/', '', (string) $migration->version);
+            if (strcmp($version, $latest) > 0) {
+                $latest = $version;
+            }
+        }
+
+        return (int) $latest;
     }
 
     /**
@@ -52,6 +78,17 @@ class MY_Migration extends MigrationRunner
         }
 
         return 0;
+    }
+
+    /**
+     * Drop CodeIgniter FileLocatorCache so newly added migration files are discovered.
+     */
+    private function clearFileLocatorCache(): void
+    {
+        $cacheFile = WRITEPATH . 'cache/FileLocatorCache';
+        if (is_file($cacheFile)) {
+            @unlink($cacheFile);
+        }
     }
 
     /**

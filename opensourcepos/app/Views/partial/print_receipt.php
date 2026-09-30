@@ -3,11 +3,17 @@
  * @var string $selected_printer
  * @var bool $print_after_sale
  * @var array $config
+ * @var string|null $page_title
+ * @var string|null $print_filename
  */
 ?>
 
 <script type="text/javascript">
     function printdoc() {
+        <?php if (!empty($page_title ?? null) || !empty($print_filename ?? null)): ?>
+            document.title = <?= json_encode($page_title ?? $print_filename) ?>;
+        <?php endif; ?>
+
         // Install Firefox addon in order to use this plugin
         if (window.jsPrintSetup) {
             // Set top margins in millimeters

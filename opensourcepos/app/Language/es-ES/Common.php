@@ -86,4 +86,5 @@ return [
     "yes"                            => "Si",
     "you_are_using_ospos"            => "Estás usando Open Source Point Of Sale Versión",
     "zip"                            => "Código Postal",
+    "none"                           => "Walk In",
 ];

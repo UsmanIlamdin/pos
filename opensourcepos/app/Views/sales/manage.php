@@ -7,6 +7,8 @@
  * @var array $config
  * @var string|null $start_date
  * @var string|null $end_date
+ * @var array $payment_status_options
+ * @var string $selected_payment_status
  */
 ?>
 
@@ -40,9 +42,14 @@
             return {
                 "start_date": start_date,
                 "end_date": end_date,
-                "filters": $("#filters").val()
+                "filters": $("#filters").val(),
+                "payment_status": $("#payment_status_filter").val()
             }
         };
+
+        $('#payment_status_filter').on('change', function() {
+            table_support.refresh();
+        });
 
         table_support.init({
             resource: '<?= esc($controller_name) ?>',
@@ -93,6 +100,11 @@
             'data-selected-text-format' => 'count > 1',
             'data-style'                => 'btn-default btn-sm',
             'data-width'                => 'fit'
+        ]) ?>
+        <?= form_dropdown('payment_status_filter', $payment_status_options ?? [], $selected_payment_status ?? 'all', [
+            'id'    => 'payment_status_filter',
+            'class' => 'form-control input-sm',
+            'style' => 'display:inline-block; width:auto;'
         ]) ?>
     </div>
 </div>

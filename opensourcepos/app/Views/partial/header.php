@@ -39,7 +39,7 @@ $request = Services::request();
         <link rel="stylesheet" href="resources/css/bootstrap-toggle-e12db6c1f3.css">
         <link rel="stylesheet" href="resources/css/bootstrap-4875cf7b0d.autocomplete.css">
         <link rel="stylesheet" href="resources/css/invoice-4e88dbe73d.css">
-        <link rel="stylesheet" href="resources/css/ospos_print-bf10c1438b.css">
+        <link rel="stylesheet" href="resources/css/ospos_print-97a484d2a9.css">
         <link rel="stylesheet" href="resources/css/ospos-d0b91fdf8f.css">
         <link rel="stylesheet" href="resources/css/popupbox-57d45cb822.css">
         <link rel="stylesheet" href="resources/css/receipt-31c4101ff7.css">
@@ -86,7 +86,7 @@ $request = Services::request();
         <!-- endinject -->
     <?php else : ?>
         <!--inject:prod:css -->
-        <link rel="stylesheet" href="resources/opensourcepos-11f6626107.min.css">
+        <link rel="stylesheet" href="resources/opensourcepos-50f74120ee.min.css">
         <!-- endinject -->
 
         <!-- Tweaks to the UI for a particular theme should drop here  -->

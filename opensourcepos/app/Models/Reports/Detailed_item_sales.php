@@ -72,9 +72,15 @@ class Detailed_item_sales extends Report
     {
         $builder = $this->db->table('sales_items_temp');
         $builder->select('
-            SUM(quantity_purchased) AS total_quantity,
+            SUM(CASE WHEN sale_type IN (' . SALE_TYPE_POS . ',' . SALE_TYPE_INVOICE . ') THEN quantity_purchased ELSE 0 END) AS gross_quantity,
+            SUM(CASE WHEN sale_type = ' . SALE_TYPE_RETURN . ' THEN ABS(quantity_purchased) ELSE 0 END) AS return_quantity,
+            SUM(CASE WHEN sale_type IN (' . SALE_TYPE_POS . ',' . SALE_TYPE_INVOICE . ') THEN quantity_purchased ELSE quantity_purchased END) AS total_quantity,
+            SUM(CASE WHEN sale_type IN (' . SALE_TYPE_POS . ',' . SALE_TYPE_INVOICE . ') THEN subtotal ELSE 0 END) AS gross_subtotal,
+            SUM(CASE WHEN sale_type = ' . SALE_TYPE_RETURN . ' THEN ABS(subtotal) ELSE 0 END) AS return_subtotal,
             SUM(subtotal) AS subtotal,
             SUM(tax) AS tax,
+            SUM(CASE WHEN sale_type IN (' . SALE_TYPE_POS . ',' . SALE_TYPE_INVOICE . ') THEN total ELSE 0 END) AS gross_total,
+            SUM(CASE WHEN sale_type = ' . SALE_TYPE_RETURN . ' THEN ABS(total) ELSE 0 END) AS return_total,
             SUM(total) AS total,
             SUM(cost) AS cost,
             SUM(profit) AS profit
@@ -82,7 +88,15 @@ class Detailed_item_sales extends Report
 
         $this->applyFilters($inputs, $builder);
 
-        return $builder->get()->getRowArray();
+        $row = $builder->get()->getRowArray() ?: [];
+        $row['net_total'] = $this->moneyish(($row['gross_total'] ?? 0) - ($row['return_total'] ?? 0));
+
+        return $row;
+    }
+
+    private function moneyish($value): float
+    {
+        return round((float) $value, totals_decimals());
     }
 
     private function applyFilters(array $inputs, object $builder): void

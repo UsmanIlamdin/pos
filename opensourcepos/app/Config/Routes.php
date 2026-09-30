@@ -41,3 +41,7 @@ $routes->add('reports/specific_customers', 'Reports::specific_customer_input');
 $routes->add('reports/specific_employees', 'Reports::specific_employee_input');
 $routes->add('reports/specific_discounts', 'Reports::specific_discount_input');
 $routes->add('reports/specific_suppliers', 'Reports::specific_supplier_input');
+
+$routes->add('reports/accounts_statement', 'Reports::accounts_statement');
+$routes->add('reports/accounts_statement/(:segment)', 'Reports::accounts_statement_view/$1');
+$routes->add('reports/accounts_balance', 'Reports::accounts_balance');

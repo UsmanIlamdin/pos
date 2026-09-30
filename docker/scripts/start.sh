@@ -16,6 +16,9 @@ echo ""
 # Ensure backups folder exists on host
 mkdir -p "${DOCKER_DIR}/backups"
 
+# Persist MariaDB data in the Docker directory.
+mkdir -p "${DOCKER_DIR}/data/mysql"
+
 # Ensure traefik log dir exists
 mkdir -p "${DOCKER_DIR}/traefik/logs"
 

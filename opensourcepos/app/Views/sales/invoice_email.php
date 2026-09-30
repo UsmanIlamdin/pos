@@ -65,8 +65,8 @@
                             </tr>
                             <?php if ($amount_due > 0) { ?>
                                 <tr>
-                                    <td class="meta-head"><?= lang('Sales.amount_due') ?></td>
-                                    <td class="due"><?= to_currency($total) ?></td>
+                                    <td class="meta-head"><?= lang('Accounts.balance_due') ?></td>
+                                    <td class="due"><?= to_currency($current_balance ?? $amount_due) ?></td>
                                 </tr>
                             <?php } ?>
                         </table>
@@ -159,11 +159,17 @@
                     </tr>
                 <?php } ?>
 
-                <?php if (!empty($payments)) { ?>
+                <?php if (!empty($payments) || (isset($current_balance) && $current_balance > 0)) { ?>
                     <tr>
                         <td colspan="<?= $invoice_columns - 3 ?>" class="blank"> </td>
-                        <td colspan="2" class="total-line"><?= lang($amount_change >= 0 ? ($only_sale_check ? 'Sales.check_balance' : 'Sales.change_due') : 'Sales.amount_due') ?></td>
-                        <td class="total-value"><?= to_currency($amount_change) ?></td>
+                        <td colspan="2" class="total-line"><?= lang(
+                            isset($current_balance)
+                                ? 'Accounts.balance_due'
+                                : ($amount_change >= 0 ? ($only_sale_check ? 'Sales.check_balance' : 'Sales.change_due') : 'Sales.amount_due')
+                        ) ?></td>
+                        <td class="total-value"><?= to_currency(
+                            isset($current_balance) ? $current_balance : $amount_change
+                        ) ?></td>
                     </tr>
                 <?php } ?>
             </table>

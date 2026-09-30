@@ -56,6 +56,15 @@
         display: none !important;
     }
 
+    .receipt-barcode,
+    #barcode img,
+    #barcode svg {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        max-width: 280px !important;
+        height: auto !important;
+    }
+
     .fixed-table-container {
         border: none;
     }

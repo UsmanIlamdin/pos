@@ -131,43 +131,19 @@ class Customer extends Person
      */
     public function get_stats(int $customer_id): ?stdClass
     {
-        $db_prefix = $this->db->getPrefix();
-        $totals_decimals = totals_decimals();
-        $quantity_decimals = quantity_decimals();
+        $accountLib = new \App\Libraries\Customer_account_lib();
+        $stats = $accountLib->getCustomerStats($customer_id);
+        if ($stats === []) {
+            return null;
+        }
 
-        // Temp Table
-        $builder = $this->db->table('sales');
-        $builder->select('sales.sale_id AS sale_id, AVG(`' . $db_prefix . 'sales_items`.`discount`) AS avg_discount, SUM(`' . $db_prefix . 'sales_items`.`quantity_purchased`) AS quantity');
-        $builder->join('sales_items', 'sales_items.sale_id = sales.sale_id');
-        $builder->where('sales.customer_id', $customer_id);
-        $builder->groupBy('sale_id');
-        $selectQuery = $builder->getCompiledSelect();
-
-        $sql = 'CREATE TEMPORARY TABLE IF NOT EXISTS ' . $this->db->prefixTable('sales_items_temp');
-        $sql .= ' (INDEX(sale_id)) ENGINE=MEMORY (' . $selectQuery . ')';
-        $this->db->query($sql);
-
-        // Get data
-        $builder = $this->db->table('sales');
-        $builder->select([
-            'SUM(sales_payments.payment_amount - sales_payments.cash_refund) AS total',
-            'MIN(sales_payments.payment_amount - sales_payments.cash_refund) AS min',
-            'MAX(sales_payments.payment_amount - sales_payments.cash_refund) AS max',
-            'AVG(sales_payments.payment_amount - sales_payments.cash_refund) AS average',
-            "ROUND(AVG(sales_items_temp.avg_discount), $totals_decimals) AS avg_discount",
-            "ROUND(SUM(sales_items_temp.quantity), $quantity_decimals) AS quantity"
-        ]);
-        $builder->join('sales_payments AS sales_payments', 'sales.sale_id = sales_payments.sale_id');
-        $builder->join('sales_items_temp AS sales_items_temp', 'sales.sale_id = sales_items_temp.sale_id');
-        $builder->where('sales.customer_id', $customer_id);
-        $builder->where('sales.sale_status', COMPLETED);
-        $builder->groupBy('sales.customer_id');
-
-        $stat = $builder->get()->getRow();
-
-        // Drop Temp Table
-        $sql = 'DROP TEMPORARY TABLE IF EXISTS ' . $this->db->prefixTable('sales_items_temp');
-        $this->db->query($sql);
+        $stat = new \stdClass();
+        $stat->total = $stats['total'];
+        $stat->min = $stats['min'];
+        $stat->max = $stats['max'];
+        $stat->average = $stats['average'];
+        $stat->quantity = $stats['quantity'];
+        $stat->avg_discount = $stats['avg_discount'];
 
         return $stat;
     }

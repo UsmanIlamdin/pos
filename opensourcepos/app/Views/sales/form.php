@@ -23,6 +23,32 @@
 <?= form_open('sales/save/' . $sale_info['sale_id'], ['id' => 'sales_edit_form', 'class' => 'form-horizontal']) ?>
     <fieldset id="sale_basic_info">
 
+        <?php if (!empty($financial_summary)): ?>
+            <div class="panel panel-default" style="margin: 0 15px 15px;">
+                <div class="panel-heading"><?= lang('Accounts.sale_total') ?> / <?= lang('Accounts.balance') ?></div>
+                <div class="panel-body">
+                    <div class="row">
+                        <div class="col-xs-6">
+                            <p><?= lang('Accounts.sale_total') ?>: <strong><?= to_currency($financial_summary['sale_total']) ?></strong></p>
+                            <p><?= lang('Accounts.payments_applied') ?>: <strong><?= to_currency($financial_summary['payments_applied']) ?></strong></p>
+                        </div>
+                        <div class="col-xs-6">
+                            <p><?= lang('Accounts.credits_returns') ?>: <strong><?= to_currency($financial_summary['credits_returns']) ?></strong></p>
+                            <p><?= lang('Accounts.balance') ?>: <strong><?= to_currency($financial_summary['balance']) ?></strong></p>
+                            <p><?= lang('Accounts.status') ?>: <strong><?= esc($pay_status_label ?? '') ?></strong></p>
+                        </div>
+                    </div>
+                    <?php if (!empty($financial_summary['amount_tendered'])): ?>
+                        <p class="text-muted"><small><?= lang('Sales.amount_tendered') ?> (POS): <?= to_currency($financial_summary['amount_tendered']) ?>
+                        <?php if (!empty($financial_summary['change'])): ?>
+                            / <?= lang('Sales.change_due') ?>: <?= to_currency($financial_summary['change']) ?>
+                        <?php endif; ?>
+                        </small></p>
+                    <?php endif; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+
         <div class="form-group form-group-sm">
             <?= form_label(lang('Sales.receipt_number'), 'receipt_number', ['class' => 'control-label col-xs-3']) ?>
             <?= anchor('sales/receipt/' . $sale_info['sale_id'], 'POS ' . $sale_info['sale_id'], ['target' => '_blank', 'class' => 'control-label col-xs-8', "style" => "text-align: left"]) ?>
@@ -80,23 +106,18 @@
         foreach ($payments as $row) {
         ?>
             <div class="form-group form-group-sm">
-                <?= form_label(lang('Sales.payment'), "payment_$i", ['class' => 'control-label col-xs-3']) ?>
+                <?= form_label(lang('Sales.payment') . ' (POS)', "payment_$i", ['class' => 'control-label col-xs-3']) ?>
                 <div class="col-xs-4">
-                    <?php // No editing of Gift Card payments as it's a complex change ?>
                     <?= form_hidden("payment_id_$i", $row->payment_id) ?>
                     <?= form_hidden("reference_code_$i", $row->reference_code ?? '') ?>
-                    <?php if (!empty(strstr($row->payment_type, lang('Sales.giftcard')))): ?>
-                        <?= form_input(['name' => "payment_type_$i", 'value' => $row->payment_type, 'id' => "payment_type_$i", 'class' => 'form-control input-sm', 'readonly' => 'true']) ?>
-                    <?php else: ?>
-                        <?= form_dropdown("payment_type_$i", $payment_options, $row->payment_type, ['id' => "payment_types_$i", 'class' => 'form-control']) ?>
-                    <?php endif; ?>
+                    <?= form_input(['name' => "payment_type_$i", 'value' => $row->payment_type, 'id' => "payment_type_$i", 'class' => 'form-control input-sm', 'readonly' => 'true']) ?>
                 </div>
                 <div class="col-xs-4">
                     <div class="input-group input-group-sm">
                         <?php if (!is_right_side_currency_symbol()): ?>
                             <span class="input-group-addon input-sm"><b><?= esc($config['currency_symbol']) ?></b></span>
                         <?php endif; ?>
-                        <?= form_input(['name' => "payment_amount_$i", 'value' => to_currency_no_money($row->payment_amount), 'id' => "payment_amount_$i", 'class' => 'form-control input-sm', 'readonly' => 'true'])    // TODO: add type attribute ?>
+                        <?= form_input(['name' => "payment_amount_$i", 'value' => to_currency_no_money($row->payment_amount), 'id' => "payment_amount_$i", 'class' => 'form-control input-sm', 'readonly' => 'true']) ?>
                         <?php if (is_right_side_currency_symbol()): ?>
                             <span class="input-group-addon input-sm"><b><?= esc($config['currency_symbol']) ?></b></span>
                         <?php endif; ?>
@@ -107,12 +128,7 @@
             <div class="form-group form-group-sm">
                 <?= form_label(lang('Sales.refund'), "refund_$i", ['class' => 'control-label col-xs-3']) ?>
                 <div class="col-xs-4">
-                    <?php // No editing of Gift Card payments as it's a complex change ?>
-                    <?php if (!empty(strstr($row->payment_type, lang('Sales.giftcard')))): ?>
-                        <?= form_input(['name' => "refund_type_$i", 'value' => lang('Sales.cash'), 'id' => "refund_type_$i", 'class' => 'form-control input-sm', 'readonly' => 'true']) ?>
-                    <?php else: ?>
-                        <?= form_dropdown("refund_type_$i", $payment_options, lang('Sales.cash'), ['id' => "refund_types_$i", 'class' => 'form-control']) ?>
-                    <?php endif; ?>
+                    <?= form_input(['name' => "refund_type_$i", 'value' => lang('Sales.cash'), 'id' => "refund_type_$i", 'class' => 'form-control input-sm', 'readonly' => 'true']) ?>
                 </div>
                 <div class="col-xs-4">
                     <div class="input-group input-group-sm">
@@ -132,11 +148,25 @@
         echo form_hidden('number_of_payments', strval($i));
         ?>
 
+        <?php if (!empty($selected_customer_id)): ?>
+            <div class="form-group form-group-sm">
+                <div class="col-xs-offset-3 col-xs-8">
+                    <p class="help-block">
+                        <?= lang('Accounts.add_payment') ?>:
+                        <?= anchor('accounts/view/' . (int) $selected_customer_id, lang('Accounts.view_account'), ['target' => '_blank']) ?>
+                    </p>
+                </div>
+            </div>
+        <?php endif; ?>
+
         <div class="form-group form-group-sm">
             <?= form_label(lang('Sales.customer'), 'customer', ['class' => 'control-label col-xs-3']) ?>
             <div class="col-xs-8">
                 <?= form_input(['name' => 'customer_name', 'value' => $selected_customer_name, 'id' => 'customer_name', 'class' => 'form-control input-sm']) ?>
                 <?= form_hidden('customer_id', $selected_customer_id ?? '') ?>
+                <?php if (!empty($has_financial_references)): ?>
+                    <p class="help-block text-warning"><?= lang('Accounts.cannot_delete_sale_with_finance') ?></p>
+                <?php endif; ?>
             </div>
         </div>
 

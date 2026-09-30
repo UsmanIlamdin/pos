@@ -28,7 +28,8 @@ class Sale extends Model
         'invoice_number',
         'dinner_table_id',
         'work_order_number',
-        'sale_type'
+        'sale_type',
+        'return_of_sale_id',
     ];
 
     public function __construct()
@@ -145,7 +146,9 @@ class Sale extends Model
         $cash_adjustment = 'IFNULL(SUM(`payments`.`sale_cash_adjustment`), 0)';
 
         $sale_subtotal = "ROUND(SUM($sale_price), $decimals) - $internal_tax";
-        $sale_total = "ROUND(SUM($sale_price), $decimals) + $sales_tax + $cash_adjustment";
+        $sale_total = $config['tax_included']
+            ? "ROUND(SUM($sale_price), $decimals) + $cash_adjustment"
+            : "ROUND(SUM($sale_price), $decimals) + $sales_tax + $cash_adjustment";
 
         $this->create_temp_table_sales_items_taxes_data($where);
 
@@ -161,6 +164,7 @@ class Sale extends Model
                 'MAX(`' . $db_prefix . 'sales`.`sale_time`) AS sale_time',
                 'MAX(`' . $db_prefix . 'sales`.`invoice_number`) AS invoice_number',
                 'MAX(`' . $db_prefix . 'sales`.`quote_number`) AS quote_number',
+                'MAX(`' . $db_prefix . 'sales`.`sale_type`) AS sale_type',
                 'SUM(`sales_items`.`quantity_purchased`) AS items_purchased',
                 'MAX(CONCAT(`customer_p`.`first_name`, " ", `customer_p`.`last_name`)) AS customer_name',
                 'MAX(`customer`.`company_name`) AS company_name',
@@ -231,27 +235,33 @@ class Sale extends Model
         if (!empty($search)) {    // TODO: duplicated code.  We should think about refactoring out a method.
             if ($filters['is_valid_receipt']) {
                 $pieces = explode(' ', $search);
-                $builder->where('sales.sale_id', $pieces[1]);
+                $builder->where('sales.sale_id', $pieces[1] ?? 0);
             } else {
                 $builder->groupStart();
                 $builder->like('customer_p.last_name', $search);    // Customer last name
                 $builder->orLike('customer_p.first_name', $search);    // Customer first name
                 $builder->orLike('CONCAT(customer_p.first_name, " ", customer_p.last_name)', $search);    // Customer first and last name
                 $builder->orLike('customer.company_name', $search);    // Customer company name
-                if (ctype_digit($search)) {
+                $builder->orLike('sales.invoice_number', $search);
+                if (preg_match('/^POS\s*[#-]?\s*(\d+)$/i', trim($search), $m)) {
+                    $builder->orWhere('sales.sale_id', (int) $m[1]);
+                } elseif (ctype_digit($search)) {
                     $builder->orWhere('sales.sale_id', $search);    // Sale ID
+                    $builder->orWhere('sales.invoice_number', $search);
                 }
                 $builder->groupEnd();
             }
         }
 
         // TODO: This needs to be converted to a switch statement
-        if ($filters['sale_type'] == 'sales') {    // TODO: we need to think about refactoring this block to a switch statement.
-            $builder->where('sales.sale_status = ' . COMPLETED . ' AND payment_amount > 0');
+        if ($filters['sale_type'] == 'sales') {
+            $builder->where('sales.sale_status', COMPLETED);
+            $builder->whereIn('sales.sale_type', [SALE_TYPE_POS, SALE_TYPE_INVOICE]);
         } elseif ($filters['sale_type'] == 'quotes') {
             $builder->where('sales.sale_status = ' . SUSPENDED . ' AND sales.quote_number IS NOT NULL');
         } elseif ($filters['sale_type'] == 'returns') {
-            $builder->where('sales.sale_status = ' . COMPLETED . ' AND payment_amount < 0');
+            $builder->where('sales.sale_status', COMPLETED);
+            $builder->where('sales.sale_type', SALE_TYPE_RETURN);
         } elseif ($filters['sale_type'] == 'all') {
             $builder->where('sales.sale_status = ' . COMPLETED);
         }
@@ -416,21 +426,56 @@ class Sale extends Model
     {
         $config = config(OSPOS::class)->settings;
 
-        if (!empty($receiptSaleId)) {
-            // POS #
-            $pieces = explode(' ', trim($receiptSaleId));
+        if (empty($receiptSaleId)) {
+            return false;
+        }
 
-            if (count($pieces) == 2 && strtoupper($pieces[0]) === 'POS' && ctype_digit($pieces[1])) {
-                return $this->exists((int)$pieces[1]);
-            } elseif ($config['invoice_enable']) {
-                $saleInfo = $this->get_sale_by_invoice_number($receiptSaleId);
+        $raw = trim((string) $receiptSaleId);
 
-                if ($saleInfo->getNumRows() > 0) {
-                    $receiptSaleId = 'POS ' . $saleInfo->getRow()->sale_id;
+        // POS 12 / POS#12 / POS-12
+        if (preg_match('/^POS\s*[#-]?\s*(\d+)$/i', $raw, $matches)) {
+            $saleId = (int) $matches[1];
+            if ($this->exists($saleId)) {
+                $receiptSaleId = 'POS ' . $saleId;
 
-                    return true;
-                }
+                return true;
             }
+
+            return false;
+        }
+
+        // Invoice 12 / Invoice #12 / INV 12 / INV-12 (numeric suffix)
+        if (preg_match('/^(?:INVOICE|INV)\s*[#-]?\s*(.+)$/i', $raw, $matches)) {
+            $invoiceCandidate = trim($matches[1]);
+            $saleInfo = $this->get_sale_by_invoice_number($invoiceCandidate);
+            if ($saleInfo->getNumRows() > 0) {
+                $receiptSaleId = 'POS ' . $saleInfo->getRow()->sale_id;
+
+                return true;
+            }
+            // Also try the original token as full invoice number (e.g. INV-15 typed after INV prefix strip failed)
+            $saleInfo = $this->get_sale_by_invoice_number($raw);
+            if ($saleInfo->getNumRows() > 0) {
+                $receiptSaleId = 'POS ' . $saleInfo->getRow()->sale_id;
+
+                return true;
+            }
+        }
+
+        // Exact invoice number match (INV-15, 4, etc.)
+        if (!empty($config['invoice_enable'])) {
+            $saleInfo = $this->get_sale_by_invoice_number($raw);
+            if ($saleInfo->getNumRows() > 0) {
+                $receiptSaleId = 'POS ' . $saleInfo->getRow()->sale_id;
+
+                return true;
+            }
+        }
+
+        // Legacy: "POS 12"
+        $pieces = explode(' ', $raw);
+        if (count($pieces) == 2 && strtoupper($pieces[0]) === 'POS' && ctype_digit($pieces[1])) {
+            return $this->exists((int) $pieces[1]);
         }
 
         return false;
@@ -638,39 +683,59 @@ class Sale extends Model
                 'item_location'      => $itemData['item_location'],
                 'print_option'       => $itemData['print_option']
             ];
+            if ($this->db->fieldExists('source_line', 'sales_items') && array_key_exists('source_line', $itemData)) {
+                $salesItemsData['source_line'] = $itemData['source_line'];
+            }
 
             $builder = $this->db->table('sales_items');
             $builder->insert($salesItemsData);
 
             if ($curItemInfo->stock_type == HAS_STOCK && $saleStatus == COMPLETED) {    // TODO: === ?
-                // Update stock quantity if item type is a standard stock item and the sale is a standard sale
-                if (! $itemQuantity->changeQuantity(
-                    $itemData['item_id'],
-                    $itemData['item_location'],
-                    -(float) $itemData['quantity'],
-                )) {
-                    $this->db->transRollback();
-
-                    return INSUFFICIENT_STOCK;
+                $skipInventory = false;
+                if ($this->db->fieldExists('sale_id', 'inventory')) {
+                    $already = $this->db->table('inventory')
+                        ->where('sale_id', $saleId)
+                        ->where('trans_items', $itemData['item_id'])
+                        ->where('trans_location', $itemData['item_location'])
+                        ->countAllResults();
+                    $skipInventory = $already > 0;
                 }
 
-                // If an items was deleted but later returned it's restored with this rule
-                if ($itemData['quantity'] < 0) {
-                    $item->undelete($itemData['item_id']);
+                if (!$skipInventory) {
+                    // Update stock quantity if item type is a standard stock item and the sale is a standard sale
+                    if (! $itemQuantity->changeQuantity(
+                        $itemData['item_id'],
+                        $itemData['item_location'],
+                        -(float) $itemData['quantity'],
+                    )) {
+                        $this->db->transRollback();
+
+                        return INSUFFICIENT_STOCK;
+                    }
+
+                    // If an items was deleted but later returned it's restored with this rule
+                    if ($itemData['quantity'] < 0) {
+                        $item->undelete($itemData['item_id']);
+                    }
+
+                    // Inventory Count Details
+                    $saleRemarks = $saleType === SALE_TYPE_RETURN
+                        ? ('POS ' . $saleId . ' RETURN')
+                        : ('POS ' . $saleId);
+                    $invData = [
+                        'trans_date'      => date('Y-m-d H:i:s'),
+                        'trans_items'     => $itemData['item_id'],
+                        'trans_user'      => $employeeId,
+                        'trans_location'  => $itemData['item_location'],
+                        'trans_comment'   => $saleRemarks,
+                        'trans_inventory' => -$itemData['quantity']
+                    ];
+                    if ($this->db->fieldExists('sale_id', 'inventory')) {
+                        $invData['sale_id'] = $saleId;
+                    }
+
+                    $inventory->insert($invData, false);
                 }
-
-                // Inventory Count Details
-                $saleRemarks = 'POS ' . $saleId;    // TODO: Use string interpolation here.
-                $invData = [
-                    'trans_date'      => date('Y-m-d H:i:s'),
-                    'trans_items'     => $itemData['item_id'],
-                    'trans_user'      => $employeeId,
-                    'trans_location'  => $itemData['item_location'],
-                    'trans_comment'   => $saleRemarks,
-                    'trans_inventory' => -$itemData['quantity']
-                ];
-
-                $inventory->insert($invData, false);
             }
 
             $attribute->copy_attribute_links($itemData['item_id'], 'sale_id', $saleId);
@@ -802,6 +867,12 @@ class Sale extends Model
      */
     public function delete($sale_id = null, bool $purge = false, bool $update_inventory = true, $employee_id = null): bool
     {
+        $sale_id = (int) $sale_id;
+        $accountLib = new \App\Libraries\Customer_account_lib();
+        if ($accountLib->saleHasFinancialReferences($sale_id)) {
+            return false;
+        }
+
         // Start a transaction to assure data integrity
         $this->db->transStart();
 
@@ -1039,6 +1110,26 @@ class Sale extends Model
      */
     public function create_temp_table(array $inputs): void
     {
+        // Always rebuild temporary tables for the current sale query.
+        //
+        // Temporary tables are connection/session-scoped. Using
+        // CREATE TEMPORARY TABLE IF NOT EXISTS can leave stale data
+        // from a previous create_temp_table() call in the same DB session.
+        $this->db->query(
+            'DROP TEMPORARY TABLE IF EXISTS ' .
+            $this->db->prefixTable('sales_items_taxes_temp')
+        );
+
+        $this->db->query(
+            'DROP TEMPORARY TABLE IF EXISTS ' .
+            $this->db->prefixTable('sales_payments_temp')
+        );
+
+        $this->db->query(
+            'DROP TEMPORARY TABLE IF EXISTS ' .
+            $this->db->prefixTable('sales_items_temp')
+        );
+
         $config = config(OSPOS::class)->settings;
 
         if (empty($inputs['sale_id'])) {
@@ -1475,7 +1566,7 @@ class Sale extends Model
         if (!empty($search)) {    // TODO: this is duplicated code.  We should think about refactoring out a method
             if ($filters['is_valid_receipt']) {
                 $pieces = explode(' ', $search);
-                $builder->where('sales.sale_id', $pieces[1]);
+                $builder->where('sales.sale_id', $pieces[1] ?? 0);
             } else {
                 $builder->groupStart();
                 // Customer last name
@@ -1486,8 +1577,14 @@ class Sale extends Model
                 $builder->orLike('CONCAT(customer_p.first_name, " ", customer_p.last_name)', $search);
                 // Customer company name
                 $builder->orLike('customer.company_name', $search);
-                if (ctype_digit($search)) {
-                    $builder->orWhere('sales.sale_id', $search);    // Sale ID
+                // Invoice number
+                $builder->orLike('sales.invoice_number', $search);
+                // POS # / bare sale id
+                if (preg_match('/^POS\s*[#-]?\s*(\d+)$/i', trim($search), $m)) {
+                    $builder->orWhere('sales.sale_id', (int) $m[1]);
+                } elseif (ctype_digit($search)) {
+                    $builder->orWhere('sales.sale_id', $search);    // Sale ID / POS number
+                    $builder->orWhere('sales.invoice_number', $search);
                 }
                 $builder->groupEnd();
             }

@@ -16,8 +16,6 @@ networks:
     name: pos_net
 
 volumes:
-  db_data:
-    driver: local
   app_uploads:
     driver: local
   traefik_logs:
@@ -85,6 +83,8 @@ services:
       - ./php/ci4-cache-guard.php:/usr/local/etc/php/ci4-cache-guard.php:ro
       # Keep CI4 config caching enabled without editing opensourcepos/app/Config/Optimize.php
       - ./php/Optimize.php:/app/app/Config/Optimize.php:ro
+      # Keep app startup configuration in a versioned PHP-directory script
+      - ./php/init.sh:/usr/local/bin/app-init.sh:ro
     environment:
       - CI_ENVIRONMENT=${CI_ENVIRONMENT:-production}
       - PHP_TIMEZONE=${PHP_TIMEZONE:-UTC}
@@ -98,34 +98,7 @@ services:
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - MYSQL_DB_NAME=${MYSQL_DATABASE}
       - FORCE_HTTPS=${FORCE_HTTPS:-true}
-    command: >
-      /bin/sh -c "SCHEME=$$( [ \"$${FORCE_HTTPS}\" = 'true' ] && echo https || echo http );
-      if grep -q '^app.baseURL=' /app/.env; then
-        sed -i \"s|^app.baseURL=.*|app.baseURL='$${SCHEME}://$${APP_DOMAIN}/'|\" /app/.env;
-      else
-        echo \"app.baseURL='$${SCHEME}://$${APP_DOMAIN}/'\" >> /app/.env;
-      fi;
-      if grep -q '^app.allowedHostnames=' /app/.env; then
-        sed -i \"s|^app.allowedHostnames=.*|app.allowedHostnames='$${ALLOWED_HOSTNAMES}'|\" /app/.env;
-      else
-        echo \"app.allowedHostnames='$${ALLOWED_HOSTNAMES}'\" >> /app/.env;
-      fi;
-      if grep -Eq \"^encryption\\.key=(''|\\\"\\\" )?$$\" /app/.env || ! grep -q '^encryption.key=' /app/.env; then
-        KEY=$$(openssl rand -hex 32);
-        if grep -q '^encryption.key=' /app/.env; then
-          sed -i \"s|^encryption.key=.*|encryption.key=hex2bin:$${KEY}|\" /app/.env;
-        else
-          echo \"encryption.key=hex2bin:$${KEY}\" >> /app/.env;
-        fi;
-      fi;
-      rm -f /app/writable/cache/FactoriesCache_config /app/writable/cache/FileLocatorCache;
-      if grep -q '^logger.threshold=' /app/.env; then
-        sed -i 's|^logger.threshold=.*|logger.threshold=4|' /app/.env;
-      else
-        echo 'logger.threshold=4' >> /app/.env;
-      fi;
-      mkdir -p /app/writable/logs && chown www-data:www-data /app/writable/logs && chmod 775 /app/writable/logs;
-      apache2-foreground"
+    command: ["/bin/sh", "/usr/local/bin/app-init.sh"]
     labels:
       - "traefik.enable=true"
       # Match hostname, Wi‑Fi/LAN IP, and localhost — LAN_IP comes from .env (kept in sync by start.sh)
@@ -157,7 +130,7 @@ services:
       - "traefik.tcp.routers.mariadb.service=mariadb"
       - "traefik.tcp.services.mariadb.loadbalancer.server.port=3306"
     volumes:
-      - db_data:/var/lib/mysql
+      - ./data/mysql:/var/lib/mysql
       - ./mariadb/init:/docker-entrypoint-initdb.d:ro   # SQL init scripts
     environment:
       - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}

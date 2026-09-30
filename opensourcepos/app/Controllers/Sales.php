@@ -21,6 +21,7 @@ use App\Models\Tokens\Token_invoice_count;
 use App\Models\Tokens\Token_customer;
 use App\Models\Tokens\Token_invoice_sequence;
 use CodeIgniter\HTTP\ResponseInterface;
+use Config\Database;
 use Config\Services;
 use Config\OSPOS;
 use ReflectionException;
@@ -120,6 +121,15 @@ class Sales extends Secure_Controller
             }
             $data['selected_filters'] = $selectedFilters;
 
+            $data['payment_status_options'] = [
+                'all'                        => lang('Sales.no_filter'),
+                SALE_PAY_STATUS_UNPAID       => lang('Accounts.open'),
+                SALE_PAY_STATUS_PARTIAL      => lang('Accounts.status_partially_paid'),
+                SALE_PAY_STATUS_PAID         => lang('Accounts.status_paid'),
+                SALE_PAY_STATUS_CANCELLED    => lang('Accounts.status_cancelled'),
+            ];
+            $data['selected_payment_status'] = $this->request->getGet('payment_status', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?: 'all';
+
             return view('sales/manage', $data);
         }
     }
@@ -183,15 +193,74 @@ class Sales extends Secure_Controller
         $sales = $this->sale->search($search, $filters, $limit, $offset, $sort, $order);
         $totalRows = $this->sale->get_found_rows($search, $filters);
         $payments = $this->sale->getPaymentsSummary($search, $filters);
-        $paymentSummary = getSalesManagePaymentsSummary($payments);
+
+        $saleRows = $sales->getResult();
+        $saleIds = array_map(static fn ($sale) => (int) $sale->sale_id, $saleRows);
+        $accountLib = new \App\Libraries\Customer_account_lib();
+        $summaryMap = $accountLib->getSalesFinancialSummaryMap($saleIds);
+
+        $statusLabels = [
+            SALE_PAY_STATUS_CANCELLED => lang('Accounts.status_cancelled'),
+            SALE_PAY_STATUS_PAID      => lang('Accounts.status_paid'),
+            SALE_PAY_STATUS_UNPAID    => lang('Accounts.open'),
+            SALE_PAY_STATUS_PARTIAL   => lang('Accounts.status_partially_paid'),
+        ];
+
+        $paymentStatusFilter = $this->request->getGet('payment_status', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+
+        $filteredRows = [];
+        $pageOutstanding = 0.0;
+        foreach ($saleRows as $sale) {
+            $summary = $summaryMap[(int) $sale->sale_id] ?? null;
+            if ($summary === null) {
+                continue;
+            }
+            if ($paymentStatusFilter && $paymentStatusFilter !== 'all' && $summary['status'] !== $paymentStatusFilter) {
+                continue;
+            }
+            $sale->sale_total = $summary['sale_total'];
+            $sale->payments_applied = $summary['payments_applied'];
+            $sale->credits_returns = $summary['credits_returns'];
+            $sale->balance = $summary['balance'];
+            $sale->balance_due = $summary['balance'];
+            $sale->pay_status = $summary['status'];
+            $sale->pay_status_label = $statusLabels[$summary['status']] ?? $summary['status'];
+            $pageOutstanding += (float) $summary['balance'];
+            $filteredRows[] = $sale;
+        }
+
+        $paymentSummary = getSalesManagePaymentsSummary($payments, $pageOutstanding);
 
         $dataRows = [];
-        foreach ($sales->getResult() as $sale) {
+        foreach ($filteredRows as $sale) {
             $dataRows[] = getSaleDataRow($sale);
         }
 
-        if ($totalRows > 0) {
-            $dataRows[] = getSaleDataLastRow($sales);
+        if ($filteredRows !== []) {
+            $sum_sale_total = 0.0;
+            $sum_payments = 0.0;
+            $sum_credits = 0.0;
+            $sum_balance = 0.0;
+            foreach ($filteredRows as $sale) {
+                $sum_sale_total += (float) $sale->sale_total;
+                $sum_payments += (float) $sale->payments_applied;
+                $sum_credits += (float) $sale->credits_returns;
+                $sum_balance += (float) $sale->balance;
+            }
+            $dataRows[] = [
+                'sale_id'         => '-',
+                'sale_time'       => lang('Sales.total') . ' (page)',
+                'customer_name'   => '',
+                'sale_total'      => to_currency($sum_sale_total),
+                'payments'        => to_currency($sum_payments),
+                'credits_returns' => to_currency($sum_credits),
+                'balance'         => to_currency($sum_balance),
+                'pay_status'      => '',
+                'invoice_number'  => '',
+                'invoice'         => '',
+                'receipt'         => '',
+                'start_return'    => '',
+            ];
         }
 
         return $this->response->setJSON(['total' => $totalRows, 'rows' => $dataRows, 'payment_summary' => $paymentSummary]);
@@ -206,13 +275,17 @@ class Sales extends Secure_Controller
     public function getItemSearch(): ResponseInterface
     {
         $suggestions = [];
-        $receipt = $search = $this->request->getGet('term') != ''
+        $search = $this->request->getGet('term') != ''
             ? $this->request->getGet('term')
             : null;
+        $receipt = $search;
 
-        if ($this->sale_lib->get_mode() == 'return' && $this->sale->isValidReceipt($receipt)) {
-            // If a valid receipt or invoice was found the search term will be replaced with a receipt number (POS #)
+        if ($this->sale_lib->get_mode() == 'return' && $receipt !== null && $this->sale->isValidReceipt($receipt)) {
+            // Normalized to POS #N; also offer the typed invoice/POS token for clarity
             $suggestions[] = $receipt;
+            if (is_string($search) && $search !== $receipt) {
+                array_unshift($suggestions, $search);
+            }
         }
         $suggestions = array_merge($suggestions, $this->item->get_search_suggestions($search, ['search_custom' => false, 'is_deleted' => false], true));
         $suggestions = array_merge($suggestions, $this->item_kit->get_search_suggestions($search));
@@ -278,6 +351,11 @@ class Sales extends Secure_Controller
             $this->sale_lib->set_sale_type(SALE_TYPE_INVOICE);
         } else {
             $this->sale_lib->set_sale_type(SALE_TYPE_RETURN);
+        }
+
+        if ($mode !== 'return') {
+            $this->sale_lib->clear_return_of_sale_id();
+            $this->sale_lib->clear_return_settlement();
         }
 
         if ($this->config['dinner_table_enable']) {
@@ -346,7 +424,9 @@ class Sales extends Secure_Controller
      */
     public function postSetInvoiceNumber(): ResponseInterface|string
     {
-        $this->sale_lib->set_invoice_number($this->request->getPost('sales_invoice_number', FILTER_SANITIZE_NUMBER_INT));
+        // Keep alphanumeric invoice formats (e.g. INVC-{ISEQ}). NUMBER_INT strips letters
+        // and turns "INVC-10" into "-10".
+        $this->sale_lib->set_invoice_number($this->request->getPost('sales_invoice_number', FILTER_SANITIZE_FULL_SPECIAL_CHARS));
         return $this->response->setJSON(['success' => true]);
     }
 
@@ -430,8 +510,12 @@ class Sales extends Secure_Controller
         } elseif (in_array($paymentType, get_reference_code_payment_types())) {
             $min      = (int)($this->config['payment_reference_code_min'] ?? 3);
             $max      = (int)($this->config['payment_reference_code_max'] ?? 20);
+            // Returns use negative tendered amounts (cash refund / reverse payment).
+            $amountRule = $this->sale_lib->is_return_mode()
+                ? 'trim|required|decimal_locale'
+                : 'trim|required|decimal_locale|nonNegativeDecimal';
             $rules    = [
-                'amount_tendered' => 'trim|required|decimal_locale|nonNegativeDecimal',
+                'amount_tendered' => $amountRule,
                 'reference_code'  => "trim|required|alpha_numeric|min_length[$min]|max_length[$max]",
             ];
             $messages = [
@@ -448,7 +532,10 @@ class Sales extends Secure_Controller
                 ],
             ];
         } else {
-            $rules    = ['amount_tendered' => 'trim|required|decimal_locale|nonNegativeDecimal'];
+            $amountRule = $this->sale_lib->is_return_mode()
+                ? 'trim|required|decimal_locale'
+                : 'trim|required|decimal_locale|nonNegativeDecimal';
+            $rules    = ['amount_tendered' => $amountRule];
             $messages = [
                 'amount_tendered' => [
                     'required'           => lang('Sales.must_enter_numeric'),
@@ -580,7 +667,11 @@ class Sales extends Secure_Controller
         $item_location = $this->sale_lib->get_sale_location();
 
         if ($mode == 'return' && $this->sale->isValidReceipt($item_id_or_number_or_item_kit_or_receipt)) {
-            $this->sale_lib->return_entire_sale($item_id_or_number_or_item_kit_or_receipt);
+            try {
+                $this->sale_lib->return_entire_sale($item_id_or_number_or_item_kit_or_receipt);
+            } catch (\RuntimeException $e) {
+                $data['error'] = $e->getMessage();
+            }
         } elseif ($this->item_kit->is_valid_item_kit($item_id_or_number_or_item_kit_or_receipt)) {
             // Add kit item to order if one is assigned
             $pieces = explode(' ', $item_id_or_number_or_item_kit_or_receipt);
@@ -824,18 +915,32 @@ class Sales extends Secure_Controller
             return $this->reload($data);
         }
 
-        if (!$totals['payments_cover_total'] && !$this->sale_lib->is_invoice_mode() && !$this->sale_lib->is_quote_mode()) {
+        if (!$totals['payments_cover_total']
+            && !$this->sale_lib->is_invoice_mode()
+            && !$this->sale_lib->is_quote_mode()
+            && !$this->sale_lib->return_settlement_covers_total()
+        ) {
             $data['error'] = lang('Sales.amount_due_not_covered');
             return $this->reload($data);
         }
 
-        if ($data['cash_mode']) {    // TODO: Convert this to ternary notation
+        // AR return settlement: no cash tender required — clear accidental payments so cashup stays clean.
+        if ($this->sale_lib->return_settlement_covers_total()) {
+            $this->sale_lib->empty_payments();
+            $data['payments'] = [];
+            $data['payments_total'] = 0;
+            $data['payments_cover_total'] = true;
+            $data['amount_due'] = 0;
+            $data['amount_change'] = 0;
+        } elseif ($data['cash_mode']) {    // TODO: Convert this to ternary notation
             $data['amount_due'] = $totals['cash_amount_due'];
         } else {
             $data['amount_due'] = $totals['amount_due'];
         }
 
-        $data['amount_change'] = $data['amount_due'] * -1;
+        if (!$this->sale_lib->return_settlement_covers_total()) {
+            $data['amount_change'] = $data['amount_due'] * -1;
+        }
 
         if ($data['amount_change'] > 0) {
             // Save cash refund to the cash payment transaction if found, if not then add as new Cash transaction
@@ -899,6 +1004,8 @@ class Sales extends Secure_Controller
                     return $this->reload($data);
                 } else {
                     $data['barcode'] = $this->barcode_lib->generate_receipt_barcode($data['sale_id']);
+                    $data['page_title'] = $this->buildSaleDocumentTitle('INV', (string) ($invoiceNumber ?: $data['sale_id_num']));
+                    $data['print_filename'] = $data['page_title'];
                     $this->sale_lib->clear_all();
                     return view('sales/' . $invoiceView, $data);
                 }
@@ -996,7 +1103,111 @@ class Sales extends Secure_Controller
                 $saleType = SALE_TYPE_POS;
             }
 
+            // Enforce cumulative returnable quantities before persisting.
+            if ($saleType === SALE_TYPE_RETURN) {
+                log_message('error', 'RETURN DEBUG postComplete cart: ' . json_encode($data['cart']));
+                log_message('error', 'RETURN DEBUG totals: ' . json_encode($totals));
+                log_message('error', 'RETURN DEBUG sale_id: ' . $saleId);
+                log_message('error', 'RETURN DEBUG return_of_sale_id: ' . $this->sale_lib->get_return_of_sale_id());
+                log_message('error', 'RETURN DEBUG settlement: ' . $this->sale_lib->get_return_settlement());
+
+                if ($data['cart'] === [] || abs((float) $totals['total']) < 0.00001) {
+                    $data['error'] = lang('Sales.return_empty_cart');
+
+                    return $this->reload($data);
+                }
+                foreach ($data['cart'] as $line) {
+                    if ((float) ($line['quantity'] ?? 0) >= 0) {
+                        $data['error'] = lang('Sales.return_quantity_must_be_negative');
+
+                        return $this->reload($data);
+                    }
+                }
+                $returnOfSaleId = $this->sale_lib->get_return_of_sale_id();
+                $accountLib = new \App\Libraries\Customer_account_lib();
+                if ($returnOfSaleId !== null) {
+                    try {
+                        $this->sale_lib->assertReturnCustomer($returnOfSaleId);
+                        if (!$accountLib->saleHasReturnableQuantity($returnOfSaleId)) {
+                            $data['error'] = lang('Sales.return_nothing_left');
+
+                            return $this->reload($data);
+                        }
+                        $accountLib->assertReturnCartWithinRemaining(
+                            $returnOfSaleId,
+                            $data['cart']
+                        );
+                        $settlementPreview = $this->sale_lib->get_return_settlement();
+                        if ($settlementPreview === 'outstanding') {
+                            $accountLib->assertReturnOutstandingAmount(
+                                $returnOfSaleId,
+                                abs((float) $totals['total'])
+                            );
+                        }
+                        if ($settlementPreview === 'cash') {
+                            $accountLib->assertCashRefundEligible(
+                                $returnOfSaleId,
+                                abs((float) $totals['total'])
+                            );
+                        }
+                    } catch (\RuntimeException $e) {
+                        $data['error'] = $e->getMessage();
+
+                        return $this->reload($data);
+                    }
+                }
+            }
+
+            // Settlement covers tender: clear payments; cash mode records cash_refund for cashup.
+            if ($saleType === SALE_TYPE_RETURN && $this->sale_lib->return_settlement_covers_total()) {
+                $this->sale_lib->empty_payments();
+                $data['payments'] = [];
+                if ($this->sale_lib->get_return_settlement() === 'cash') {
+                    $refundAmt = abs((float) $totals['total']);
+                    $cashLabel = lang('Sales.cash');
+                    $data['payments'][$cashLabel] = [
+                        'payment_type'    => $cashLabel,
+                        'payment_amount'  => 0,
+                        'cash_refund'     => $refundAmt,
+                        'cash_adjustment' => 0,
+                        'reference_code'  => '',
+                    ];
+                }
+            }
+
             $data['sale_id_num'] = $this->sale->save_value($saleId, $data['sale_status'], $data['cart'], $customerId, $employeeId, $data['comments'], $invoiceNumber, $workOrderNumber, $quoteNumber, $saleType, $data['payments'], $data['dinner_table'], $taxDetails);
+
+            /**
+
+             * RETURN DEBUG: Verify that return items were actually persisted
+
+             * to sales_items after save_value() creates the return sale.
+
+             */
+
+            if ($saleType === SALE_TYPE_RETURN && $data['sale_id_num'] > 0) {
+
+                $savedReturnItems = $this->sale->db
+
+                    ->table('sales_items')
+
+                    ->where('sale_id', $data['sale_id_num'])
+
+                    ->get()
+
+                    ->getResultArray();
+
+                log_message('error', 'RETURN DEBUG persisted sales_items: ' . json_encode([
+
+                        'sale_id' => $data['sale_id_num'],
+
+                        'count' => count($savedReturnItems),
+
+                        'items' => $savedReturnItems,
+
+                    ]));
+
+            }
 
             $data['sale_id'] = 'POS ' . $data['sale_id_num'];
 
@@ -1012,7 +1223,45 @@ class Sales extends Secure_Controller
                 $data['error_message'] = lang('Sales.transaction_failed');
                 return $this->reload($data);
             } else {
+                if ($saleType === SALE_TYPE_RETURN && $data['sale_id_num'] > 0) {
+                    $returnOfSaleId = $this->sale_lib->get_return_of_sale_id();
+                    if ($returnOfSaleId !== null) {
+                        $this->sale->db->table('sales')
+                            ->where('sale_id', $data['sale_id_num'])
+                            ->update(['return_of_sale_id' => $returnOfSaleId]);
+                    }
+                    $settlementMode = $this->sale_lib->get_return_settlement();
+                    try {
+                        (new \App\Libraries\Customer_account_lib())->onReturnSaleCompleted(
+                            (int) $data['sale_id_num'],
+                            (int) $employeeId,
+                            $settlementMode
+                        );
+                    } catch (\Throwable $e) {
+                        log_message('error', 'Return credit processing failed: ' . $e->getMessage());
+                        // Fail closed: reverse the orphan return document + stock.
+                        try {
+                            $this->sale->delete_list(
+                                [(int) $data['sale_id_num']],
+                                (int) $employeeId,
+                                false
+                            );
+                        } catch (\Throwable $delEx) {
+                            log_message('error', 'Return rollback delete failed: ' . $delEx->getMessage());
+                        }
+                        $data['error'] = $e instanceof \RuntimeException
+                            ? $e->getMessage()
+                            : lang('Sales.return_accounting_failed');
+
+                        return $this->reload($data);
+                    }
+                    $this->sale_lib->clear_return_of_sale_id();
+                    $this->sale_lib->clear_return_settlement();
+                }
+
                 $data['barcode'] = $this->barcode_lib->generate_receipt_barcode($data['sale_id']);
+                $data['page_title'] = $this->buildSaleDocumentTitle('SR', (string) $data['sale_id_num']);
+                $data['print_filename'] = $data['page_title'];
 
                 // Validate receipt template to prevent path traversal
                 $receiptTemplate = $this->config['receipt_template'] ?? '';
@@ -1071,7 +1320,12 @@ class Sales extends Secure_Controller
 
             // Load PDF helper
             helper(['dompdf', 'file']);
-            $filename = sys_get_temp_dir() . '/' . lang('Sales.' . $type) . '-' . str_replace('/', '-', $number) . '.pdf';
+            $prefix = $type === 'receipt' ? 'SR' : 'INV';
+            if (in_array($type, ['quote', 'work_order'], true)) {
+                $prefix = strtoupper($type === 'work_order' ? 'WO' : 'Q');
+            }
+            $docTitle = $this->buildSaleDocumentTitle($prefix, $number !== '' ? (string) $number : (string) $saleId);
+            $filename = sys_get_temp_dir() . '/' . $docTitle . '.pdf';
             if (file_put_contents($filename, create_pdf($html)) !== false) {
                 $result = $this->email_lib->sendEmail($to, $subject, $text, $filename);
             }
@@ -1297,7 +1551,77 @@ class Sales extends Secure_Controller
         }
         $data['receipt_template_view'] = $receipt_template;
 
+        // Authoritative AR balance for invoices/receipts (excludes Due placeholders; includes account allocations / return credits).
+        $this->applySaleAccountFinancials((int) $sale_id, $data);
+
         return $data;
+    }
+
+    /**
+     * Overlay Customer Account financials onto sale document data.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function applySaleAccountFinancials(int $saleId, array &$data): void
+    {
+        $accountLib = new \App\Libraries\Customer_account_lib();
+        $financial = $accountLib->getSaleFinancialSummary($saleId);
+        $data['financial_summary'] = $financial;
+        $data['current_balance'] = $financial['balance'];
+
+        // Drop Due placeholders from document payment lines.
+        $displayPayments = [];
+        foreach ($data['payments'] ?? [] as $key => $payment) {
+            $type = is_array($payment)
+                ? (string) ($payment['payment_type'] ?? $key)
+                : (string) ($payment->payment_type ?? $key);
+            if ($accountLib->isDuePaymentType($type)) {
+                continue;
+            }
+            $displayPayments[$key] = $payment;
+        }
+
+        // Append active customer-account allocations as subsequent payments on the document.
+        $allocRows = Database::connect()->table('customer_payment_allocations AS cpa')
+            ->select('cpa.amount, cap.payment_type, cap.payment_id')
+            ->join('customer_account_payments AS cap', 'cap.payment_id = cpa.customer_account_payment_id')
+            ->where('cpa.sale_id', $saleId)
+            ->where('cpa.status', CA_STATUS_ACTIVE)
+            ->where('cap.status', CA_STATUS_ACTIVE)
+            ->get()
+            ->getResultArray();
+
+        foreach ($allocRows as $alloc) {
+            $label = lang('Accounts.account_payment') . ' / ' . $alloc['payment_type'];
+            $displayPayments['account_' . $alloc['payment_id']] = [
+                'payment_type'   => $label,
+                'payment_amount' => (float) $alloc['amount'],
+                'cash_refund'    => 0,
+            ];
+        }
+
+        $returnAllocs = Database::connect()->table('customer_return_credit_allocations AS rca')
+            ->select('rca.amount, rc.return_sale_id')
+            ->join('customer_return_credits AS rc', 'rc.return_credit_id = rca.return_credit_id')
+            ->where('rca.sale_id', $saleId)
+            ->where('rca.status', CA_STATUS_ACTIVE)
+            ->where('rc.status', CA_STATUS_ACTIVE)
+            ->get()
+            ->getResultArray();
+
+        foreach ($returnAllocs as $alloc) {
+            $label = lang('Accounts.return_credit') . ' / Return #' . $alloc['return_sale_id'];
+            $displayPayments['return_' . $alloc['return_sale_id']] = [
+                'payment_type'   => $label,
+                'payment_amount' => (float) $alloc['amount'],
+                'cash_refund'    => 0,
+            ];
+        }
+
+        $data['payments'] = $displayPayments;
+        $data['amount_due'] = $financial['balance'];
+        $data['amount_change'] = $financial['balance'] * -1;
+        $data['payments_total'] = $financial['payments_applied'];
     }
 
     /**
@@ -1340,7 +1664,8 @@ class Sales extends Secure_Controller
         $data['subtotal'] = $totals['subtotal'];
         $data['total'] = $totals['total'];
         $data['payments_total'] = $totals['payment_total'];
-        $data['payments_cover_total'] = $totals['payments_cover_total'];
+        $data['payments_cover_total'] = $totals['payments_cover_total']
+            || $this->sale_lib->return_settlement_covers_total();
 
         // cash_mode indicates whether this sale is going to be processed using cash_rounding
         $cash_mode = $this->session->get('cash_mode');
@@ -1413,7 +1738,104 @@ class Sales extends Secure_Controller
             $data['customer_required'] = lang('Sales.customer_optional');
         }
 
+        $data['return_of_sale_id'] = null;
+        $data['return_of_sale_label'] = null;
+        $data['return_settlement'] = 'cash';
+        $data['return_has_customer'] = false;
+        $data['returnable_items'] = [];
+        if ($this->sale_lib->is_return_mode()) {
+            $data['return_settlement'] = $this->sale_lib->get_return_settlement();
+            $custId = $this->sale_lib->get_customer();
+            $data['return_has_customer'] = $custId !== NEW_ENTRY && $custId > 0;
+            $returnOfSaleId = $this->sale_lib->get_return_of_sale_id();
+            if ($returnOfSaleId !== null) {
+                $orig = $this->sale->get_info($returnOfSaleId)->getRowArray();
+                $data['return_of_sale_id'] = $returnOfSaleId;
+                $invoiceNumber = !empty($orig['invoice_number'] ?? null) ? (string) $orig['invoice_number'] : null;
+                // Prefer direct DB lookup for invoice number when get_info omits it
+                if ($invoiceNumber === null) {
+                    $saleRow = Database::connect()->table('sales')->select('invoice_number')->where('sale_id', $returnOfSaleId)->get()->getRowArray();
+                    $invoiceNumber = !empty($saleRow['invoice_number']) ? (string) $saleRow['invoice_number'] : null;
+                }
+                $data['return_of_sale_label'] = $invoiceNumber !== null
+                    ? lang('Sales.return_linked_to_invoice', [$invoiceNumber, (string) $returnOfSaleId])
+                    : lang('Sales.return_linked_to_sale', [(string) $returnOfSaleId]);
+                $data['returnable_items'] = array_values(
+                    (new \App\Libraries\Customer_account_lib())->getSaleReturnableItems($returnOfSaleId)
+                );
+            }
+        }
+
         return view("sales/register", $data);
+    }
+
+    /**
+     * Set how a return settles: outstanding due, customer credit, or cash refund.
+     *
+     * @noinspection PhpUnused
+     */
+    public function postSetReturnSettlement(): ResponseInterface|string
+    {
+        $mode = (string) $this->request->getPost('return_settlement', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+        $cart = $this->sale_lib->get_cart();
+        $returnOfSaleId = $this->sale_lib->get_return_of_sale_id();
+        if ($cart === [] || ($returnOfSaleId !== null && !(new \App\Libraries\Customer_account_lib())->saleHasReturnableQuantity($returnOfSaleId))) {
+            return $this->reload(['error' => lang('Sales.return_nothing_left')]);
+        }
+        $this->sale_lib->set_return_settlement($mode);
+        if ($this->sale_lib->return_settlement_covers_total()) {
+            $this->sale_lib->empty_payments();
+        }
+
+        return $this->reload();
+    }
+
+    /**
+     * Open the register in Return mode linked to a sale/invoice from Sales History.
+     *
+     * @noinspection PhpUnused
+     */
+    public function getStartReturn(int $saleId): ResponseInterface
+    {
+        $personId = $this->session->get('person_id');
+        if (!$this->employee->has_grant('sales', $personId)) {
+            return redirect()->to('no_access/sales');
+        }
+
+        $sale = Database::connect()->table('sales')
+            ->select('sale_id, sale_status, sale_type, customer_id')
+            ->where('sale_id', $saleId)
+            ->get()
+            ->getRowArray();
+
+        if ($sale === null || (int) $sale['sale_status'] !== COMPLETED) {
+            return redirect()->to('sales/manage');
+        }
+        if ((int) $sale['sale_type'] === SALE_TYPE_RETURN) {
+            return redirect()->to('sales/manage');
+        }
+
+        $accountLib = new \App\Libraries\Customer_account_lib();
+        if (!$accountLib->saleHasReturnableQuantity($saleId)) {
+            return redirect()->to('sales')->with('error', lang('Sales.return_nothing_left'));
+        }
+
+        $this->sale_lib->clear_all();
+        $this->sale_lib->set_mode('return');
+        $this->sale_lib->set_sale_type(SALE_TYPE_RETURN);
+        $originalCustomerId = (int) ($sale['customer_id'] ?? 0);
+        if ($originalCustomerId > 0) {
+            $this->sale_lib->set_customer($originalCustomerId);
+        }
+        $this->sale_lib->return_entire_sale('POS ' . $saleId);
+        if ($this->sale_lib->get_cart() === []) {
+            $this->sale_lib->clear_all();
+
+            return redirect()->to('sales')->with('error', lang('Sales.return_nothing_left'));
+        }
+        $this->sale_lib->set_return_settlement('outstanding');
+
+        return redirect()->to('sales');
     }
 
     /**
@@ -1433,6 +1855,8 @@ class Sales extends Secure_Controller
 
         $data = $this->_load_sale_data($saleId);
         $this->sale_lib->clear_all();
+        $data['page_title'] = $this->buildSaleDocumentTitle('SR', (string) $saleId);
+        $data['print_filename'] = $data['page_title'];
 
         return view('sales/receipt', $data);
     }
@@ -1454,6 +1878,9 @@ class Sales extends Secure_Controller
 
         $data = $this->_load_sale_data($saleId);
         $this->sale_lib->clear_all();
+        $invoiceNumber = !empty($data['invoice_number']) ? (string) $data['invoice_number'] : (string) $saleId;
+        $data['page_title'] = $this->buildSaleDocumentTitle('INV', $invoiceNumber);
+        $data['print_filename'] = $data['page_title'];
 
         return view('sales/' . $data['invoice_view'], $data);
     }
@@ -1482,15 +1909,28 @@ class Sales extends Secure_Controller
         $data['selected_employee_id'] = $saleInfo['employee_id'];
         $data['selected_employee_name'] = $employeeInfo->first_name . ' ' . $employeeInfo->last_name;
         $data['sale_info'] = $saleInfo;
-        $balanceDue = round($saleInfo['amount_due'] - $saleInfo['amount_tendered'] + $saleInfo['cash_refund'], totals_decimals(), PHP_ROUND_HALF_UP);
 
-        if (!$this->sale_lib->reset_cash_rounding() && $balanceDue < 0) {
-            $balanceDue = 0;
-        }
+        $accountLib = new \App\Libraries\Customer_account_lib();
+        $financial = $accountLib->getSaleFinancialSummary($saleId);
+        $data['financial_summary'] = $financial;
+        $data['has_financial_references'] = $accountLib->saleHasFinancialReferences($saleId);
+        $balanceDue = $financial['balance'];
+
+        $statusLabels = [
+            SALE_PAY_STATUS_CANCELLED => lang('Accounts.status_cancelled'),
+            SALE_PAY_STATUS_PAID      => lang('Accounts.status_paid'),
+            SALE_PAY_STATUS_UNPAID    => lang('Accounts.open'),
+            SALE_PAY_STATUS_PARTIAL   => lang('Accounts.status_partially_paid'),
+        ];
+        $data['pay_status_label'] = $statusLabels[$financial['status']] ?? $financial['status'];
 
         $data['payments'] = [];
 
         foreach ($this->sale->get_sale_payments($saleId)->getResult() as $payment) {
+            if ($accountLib->isDuePaymentType((string) $payment->payment_type)) {
+                // Due is metadata — show in summary only, not as editable payment
+                continue;
+            }
             foreach (get_object_vars($payment) as $property => $value) {
                 $payment->$property = $value;
             }
@@ -1500,10 +1940,11 @@ class Sales extends Secure_Controller
         $data['payment_type_new'] = PAYMENT_TYPE_UNASSIGNED;
         $data['payment_amount_new'] = $balanceDue;
 
-        $data['balance_due'] = $balanceDue != 0;
+        $data['balance_due'] = $balanceDue > 0 && !empty($saleInfo['customer_id']);
 
         // Don't allow gift card to be a payment option in a sale transaction edit because it's a complex change
         $paymentOptions = $this->sale->get_payment_options(false);
+        unset($paymentOptions[lang('Sales.due')], $paymentOptions['Due']);
 
         if ($this->sale_lib->reset_cash_rounding()) {
             $paymentOptions[lang('Sales.cash_adjustment')] = lang('Sales.cash_adjustment');
@@ -1541,9 +1982,19 @@ class Sales extends Secure_Controller
                     'message' => lang('Sales.successfully_deleted') . ' ' . count($sale_ids) . ' ' . lang('Sales.one_or_multiple'),
                     'ids'     => $sale_ids
                 ]);
-            } else {
-                return $this->response->setJSON(['success' => false, 'message' => lang('Sales.unsuccessfully_deleted')]);
             }
+
+            $accountLib = new \App\Libraries\Customer_account_lib();
+            foreach ($sale_ids as $id) {
+                if ($accountLib->saleHasFinancialReferences((int) $id)) {
+                    return $this->response->setJSON([
+                        'success' => false,
+                        'message' => lang('Accounts.cannot_delete_sale_with_finance'),
+                    ]);
+                }
+            }
+
+            return $this->response->setJSON(['success' => false, 'message' => lang('Sales.unsuccessfully_deleted')]);
         }
     }
 
@@ -1602,6 +2053,20 @@ class Sales extends Secure_Controller
             'comment'        => $this->request->getPost('comment', FILTER_SANITIZE_FULL_SPECIAL_CHARS),
             'invoice_number' => $this->request->getPost('invoice_number') != '' ? $this->request->getPost('invoice_number', FILTER_SANITIZE_FULL_SPECIAL_CHARS) : null
         ];
+
+        $existingSale = $this->sale->get_info($saleId)->getRowArray();
+        $accountLib = new \App\Libraries\Customer_account_lib();
+        if (
+            !empty($existingSale['customer_id'])
+            && empty($saleData['customer_id'])
+            && $accountLib->saleHasFinancialReferences($saleId)
+        ) {
+            return $this->response->setJSON([
+                'success' => false,
+                'message' => lang('Accounts.cannot_delete_sale_with_finance'),
+                'id'      => $saleId,
+            ]);
+        }
 
         // Validate reference_code for the new payment if applicable
         $paymentTypeNewCheck = $this->request->getPost('payment_type_new', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
@@ -1963,5 +2428,30 @@ class Sales extends Secure_Controller
         }
 
         return null;
+    }
+
+    /**
+     * Browser print/Save-as-PDF uses the document title as the filename.
+     * Prefer INV-{number} for invoices and SR-{id} for receipts.
+     */
+    private function buildSaleDocumentTitle(string $prefix, string $number): string
+    {
+        $cleaned = preg_replace('/[^A-Za-z0-9]+/', '-', trim($number)) ?? '';
+        $cleaned = trim($cleaned, '-');
+        $prefixUpper = strtoupper($prefix);
+
+        if ($cleaned === '') {
+            return $prefixUpper;
+        }
+
+        // Avoid INV-INV-0001 when the configured invoice format already includes INV
+        if (stripos($cleaned, $prefixUpper . '-') === 0) {
+            return strtoupper($cleaned);
+        }
+        if (strcasecmp($cleaned, $prefixUpper) === 0) {
+            return $prefixUpper;
+        }
+
+        return $prefixUpper . '-' . $cleaned;
     }
 }

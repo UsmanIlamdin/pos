@@ -105,8 +105,12 @@ if (isset($error_message)) {
                 <td><?= esc($transaction_date) ?></td>
             </tr>
             <tr>
-                <td class="meta-head"><?= lang('Sales.amount_due') ?></td>
+                <td class="meta-head"><?= lang('Sales.invoice_total') ?></td>
                 <td><?= to_currency($total) ?></td>
+            </tr>
+            <tr>
+                <td class="meta-head"><?= lang('Accounts.balance_due') ?></td>
+                <td><?= to_currency($current_balance ?? $amount_due ?? $total) ?></td>
             </tr>
         </table>
     </div>
@@ -213,13 +217,19 @@ if (isset($error_message)) {
             </tr>
         <?php } ?>
 
-        <?php if (!empty($payments)) { ?>
+        <?php if (!empty($payments) || (isset($current_balance) && $current_balance > 0)): ?>
             <tr>
                 <td colspan="<?= $invoice_columns - 3 ?>"><?= lang('Sales.authorized_signature') ?>:</td>
-                <td colspan="2" class="total-line"><?= lang($amount_change >= 0 ? ($only_sale_check ? 'Sales.check_balance' : 'Sales.change_due') : 'Sales.amount_due') ?></td>
-                <td class="total-value" id="change"><?= to_currency($amount_change) ?></td>
+                <td colspan="2" class="total-line"><?= lang(
+                    isset($current_balance)
+                        ? 'Accounts.balance_due'
+                        : ($amount_change >= 0 ? ($only_sale_check ? 'Sales.check_balance' : 'Sales.change_due') : 'Sales.amount_due')
+                ) ?></td>
+                <td class="total-value" id="change"><?= to_currency(
+                    isset($current_balance) ? $current_balance : $amount_change
+                ) ?></td>
             </tr>
-        <?php } ?>
+        <?php endif; ?>
     </table>
 
     <div id="terms">

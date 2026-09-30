@@ -1050,6 +1050,7 @@ class Config extends Secure_Controller
             'work_order_enable'           => $this->request->getPost('work_order_enable') != null,
             'work_order_format'           => $this->request->getPost('work_order_format'),
             'last_used_work_order_number' => $this->request->getPost('last_used_work_order_number', FILTER_SANITIZE_NUMBER_INT),
+            'default_register_mode'       => $this->request->getPost('default_register_mode', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?: 'sale_invoice',
             'invoice_type'                => Sale_lib::isValidInvoiceType($this->request->getPost('invoice_type'))
                 ? $this->request->getPost('invoice_type')
                 : 'invoice'
@@ -1060,8 +1061,8 @@ class Config extends Secure_Controller
         // Update the register mode with the latest change so that if the user
         // switches immediately back to the register the mode reflects the change
         if ($success) {
-            if ($this->config['invoice_enable']) {
-                $this->sale_lib->set_mode($this->config['default_register_mode']);
+            if ($batch_save_data['invoice_enable']) {
+                $this->sale_lib->set_mode($batch_save_data['default_register_mode']);
             } else {
                 $this->sale_lib->set_mode('sale');
             }

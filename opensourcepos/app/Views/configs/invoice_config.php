@@ -2,6 +2,7 @@
 /**
  * @var array $invoice_type_options
  * @var array $line_sequence_options
+ * @var array $register_mode_options
  * @var array $config
  */
 ?>
@@ -33,6 +34,18 @@
                         $invoice_type_options,
                         $config['invoice_type'],
                         'class="form-control input-sm"'
+                    ) ?>
+                </div>
+            </div>
+
+            <div class="form-group form-group-sm">
+                <?= form_label(lang('Config.register_mode_default'), 'default_register_mode', ['class' => 'control-label col-xs-2']) ?>
+                <div class="col-xs-3">
+                    <?= form_dropdown(
+                        'default_register_mode',
+                        $register_mode_options,
+                        $config['default_register_mode'] ?? 'sale_invoice',
+                        'class="form-control input-sm" id="default_register_mode"'
                     ) ?>
                 </div>
             </div>
@@ -201,7 +214,7 @@
         const enable_disable_invoice_enable = (function() {
             const invoice_enabled = $("#invoice_enable").is(":checked");
             const work_order_enabled = $("#work_order_enable").is(":checked");
-            $("#sales_invoice_format, #recv_invoice_format, #invoice_default_comments, #invoice_email_message, select[name='invoice_type'], #sales_quote_format, select[name='line_sequence'], #last_used_invoice_number, #last_used_quote_number, #quote_default_comments, #work_order_enable, #work_order_format, #last_used_work_order_number").prop("disabled", !invoice_enabled);
+            $("#sales_invoice_format, #recv_invoice_format, #invoice_default_comments, #invoice_email_message, select[name='invoice_type'], #default_register_mode, #sales_quote_format, select[name='line_sequence'], #last_used_invoice_number, #last_used_quote_number, #quote_default_comments, #work_order_enable, #work_order_format, #last_used_work_order_number").prop("disabled", !invoice_enabled);
             if (invoice_enabled) {
                 $("#work_order_format, #last_used_work_order_number").prop("disabled", !work_order_enabled);
             } else {
@@ -230,7 +243,7 @@
             submitHandler: function(form) {
                 $(form).ajaxSubmit({
                     beforeSerialize: function(arr, $form, options) {
-                        $("#sales_invoice_format, #sales_quote_format, #recv_invoice_format, #invoice_default_comments, #invoice_email_message, #last_used_invoice_number, #last_used_quote_number, #quote_default_comments, #work_order_enable, #work_order_format, #last_used_work_order_number").prop("disabled", false);
+                        $("#sales_invoice_format, #sales_quote_format, #recv_invoice_format, #invoice_default_comments, #invoice_email_message, #default_register_mode, #last_used_invoice_number, #last_used_quote_number, #quote_default_comments, #work_order_enable, #work_order_format, #last_used_work_order_number").prop("disabled", false);
                         return true;
                     },
                     success: function(response) {

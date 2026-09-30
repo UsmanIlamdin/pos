@@ -35,7 +35,7 @@ if (isset($error)) {
             </div>
             <div class="list-group">
                 <?php foreach ($permission_ids as $permission_id) {
-                    if (can_show_report($permission_id, ['inventory', 'receiving'])) {
+                    if (can_show_report($permission_id, ['inventory', 'receiving', 'accounts'])) {
                         $link = get_report_link($permission_id, 'graphical_summary');
                 ?>
                         <a class="list-group-item" href="<?= $link['path'] ?>"><?= esc($link['label']) ?></a>
@@ -54,7 +54,7 @@ if (isset($error)) {
             </div>
             <div class="list-group">
                 <?php foreach ($permission_ids as $permission_id) {
-                    if (can_show_report($permission_id, ['inventory', 'receiving'])) {
+                    if (can_show_report($permission_id, ['inventory', 'receiving', 'accounts'])) {
                         $link = get_report_link($permission_id, 'summary');
                 ?>
                         <a class="list-group-item" href="<?= $link['path'] ?>"><?= esc($link['label']) ?></a>
@@ -101,6 +101,18 @@ if (isset($error)) {
                     ?>
                     <a class="list-group-item" href="<?= $inventory_low_report['path'] ?>"><?= esc($inventory_low_report['label']) ?></a>
                     <a class="list-group-item" href="<?= $inventory_summary_report['path'] ?>"><?= esc($inventory_summary_report['label']) ?></a>
+                </div>
+            </div>
+        <?php } ?>
+
+        <?php if (in_array('reports_accounts', $permission_ids, true)) { ?>
+            <div class="panel panel-primary">
+                <div class="panel-heading">
+                    <h3 class="panel-title"><span class="glyphicon glyphicon-usd">&nbsp;</span><?= lang('Module.accounts') ?></h3>
+                </div>
+                <div class="list-group">
+                    <a class="list-group-item" href="<?= site_url('reports/accounts_statement') ?>"><?= esc(lang('Reports.account_statement')) ?></a>
+                    <a class="list-group-item" href="<?= site_url('reports/accounts_balance') ?>"><?= esc(lang('Reports.customers_balance_report')) ?></a>
                 </div>
             </div>
         <?php } ?>

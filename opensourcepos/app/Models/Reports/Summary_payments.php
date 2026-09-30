@@ -172,12 +172,15 @@ class Summary_payments extends Summary_report
             . 'SET trans_amount = trans_amount + IFNULL((SELECT total_taxes FROM ' . $this->db->prefixTable('sumpay_taxes_temp')
             . ' AS sumpay_taxes WHERE sumpay_items.sale_id = sumpay_taxes.sale_id),0)');
 
+        $dueLabels = (new \App\Libraries\Customer_account_lib())->getDueLabels();
+        $dueSqlList = implode(',', array_map(fn ($label) => $this->db->escape($label), $dueLabels));
+
         $this->db->query(
             'CREATE TEMPORARY TABLE IF NOT EXISTS ' . $this->db->prefixTable('sumpay_payments_temp') .
                 ' (INDEX(sale_id)) ENGINE=MEMORY
             (
                 SELECT sales.sale_id, COUNT(sales.sale_id) AS number_payments,
-                SUM(CASE WHEN sales_payments.cash_adjustment = 0 THEN sales_payments.payment_amount ELSE 0 END) AS total_payments,
+                SUM(CASE WHEN sales_payments.cash_adjustment = 0 AND sales_payments.payment_type NOT IN (' . $dueSqlList . ') THEN sales_payments.payment_amount ELSE 0 END) AS total_payments,
                 SUM(CASE WHEN sales_payments.cash_adjustment = 1 THEN sales_payments.payment_amount ELSE 0 END) AS total_cash_adjustment,
                 SUM(sales_payments.cash_refund) AS total_cash_refund
                 FROM ' . $this->db->prefixTable('sales') . ' AS sales

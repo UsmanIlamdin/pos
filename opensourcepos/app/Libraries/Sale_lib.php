@@ -13,6 +13,7 @@ use App\Models\Enums\Rounding_mode;
 use App\Models\Sale;
 use CodeIgniter\Session\Session;
 use App\Models\Stock_location;
+use App\Libraries\Customer_account_lib;
 use Config\OSPOS;
 use ReflectionException;
 
@@ -337,11 +338,11 @@ class Sale_lib
     }
 
     /**
-     * @param int $invoice_number
+     * @param string|null $invoice_number
      * @param bool $keep_custom
      * @return void
      */
-    public function set_invoice_number(int $invoice_number, bool $keep_custom = false): void
+    public function set_invoice_number(?string $invoice_number, bool $keep_custom = false): void
     {
         $current_invoice_number = $this->session->get('sales_invoice_number');
 
@@ -864,7 +865,11 @@ class Sale_lib
     public function get_mode(): string
     {
         if (!$this->session->get('sales_mode')) {
-            $this->set_mode('sale');
+            $defaultMode = $this->config['default_register_mode'] ?? 'sale';
+            if (!$this->config['invoice_enable'] && $defaultMode !== 'return') {
+                $defaultMode = 'sale';
+            }
+            $this->set_mode($defaultMode);
         }
         return $this->session->get('sales_mode');
     }
@@ -1320,14 +1325,144 @@ class Sale_lib
         $pieces = explode(' ', $receipt_sale_id);
         $sale_id = $pieces[1];
 
+        $this->assertReturnCustomer((int) $sale_id);
         $this->empty_cart();
-        $this->remove_customer();
+
+        $accountLib = new Customer_account_lib();
+        $returnable = $accountLib->getSaleReturnableItems((int) $sale_id);
 
         foreach ($this->sale->get_sale_items_ordered($sale_id)->getResult() as $row) {
-            $this->add_item($row->item_id, $row->item_location, -$row->quantity_purchased, $row->discount, $row->discount_type, PRICE_MODE_STANDARD, null, null, $row->item_unit_price, $row->description, $row->serialnumber, null, true);
+            $itemId = (int) $row->item_id;
+            $remaining = $returnable[$itemId]['remaining'] ?? 0.0;
+            if ($remaining <= 0) {
+                continue;
+            }
+            // Use remaining returnable qty (negative for return mode cart).
+            $this->add_item(
+                $itemId,
+                $row->item_location,
+                -1 * $remaining,
+                $row->discount,
+                $row->discount_type,
+                PRICE_MODE_STANDARD,
+                null,
+                null,
+                $row->item_unit_price,
+                $row->description,
+                $row->serialnumber,
+                null,
+                true
+            );
+            // Tag last cart line with original sale line for audit linkage.
+            $cart = $this->get_cart();
+            $keys = array_keys($cart);
+            if ($keys !== []) {
+                $lastKey = $keys[count($keys) - 1];
+                $cart[$lastKey]['source_line'] = (int) $row->line;
+                $this->set_cart($cart);
+            }
         }
 
-        $this->set_customer($this->sale->get_customer($sale_id)->person_id);
+        $sale = $this->sale->get_info((int) $sale_id)->getRowArray();
+        if ((int) ($sale['customer_id'] ?? 0) > 0) {
+            $this->set_customer((int) $sale['customer_id']);
+        }
+        $this->set_return_of_sale_id((int) $sale_id);
+    }
+
+    /**
+     * Ensure a linked return is performed for the same customer as the original sale.
+     *
+     * Sales created without a customer may be returned without selecting one.
+     *
+     * @throws \RuntimeException
+     */
+    public function assertReturnCustomer(int $originalSaleId): void
+    {
+        $sale = $this->sale->get_info($originalSaleId)->getRowArray();
+        if ($sale === null) {
+            throw new \RuntimeException(lang('Sales.return_sale_not_found'));
+        }
+
+        $originalCustomerId = (int) ($sale['customer_id'] ?? 0);
+        $selectedCustomerId = $this->get_customer();
+
+        if ($originalCustomerId > 0 && $selectedCustomerId !== $originalCustomerId) {
+            throw new \RuntimeException(lang('Sales.return_customer_mismatch'));
+        }
+
+        if ($originalCustomerId <= 0 && $selectedCustomerId !== NEW_ENTRY) {
+            throw new \RuntimeException(lang('Sales.return_customer_not_allowed'));
+        }
+    }
+
+    public function set_return_of_sale_id(?int $sale_id): void
+    {
+        if ($sale_id === null || $sale_id <= 0) {
+            $this->session->remove('return_of_sale_id');
+
+            return;
+        }
+        $this->session->set('return_of_sale_id', $sale_id);
+    }
+
+    public function get_return_of_sale_id(): ?int
+    {
+        $value = $this->session->get('return_of_sale_id');
+        if ($value === null || $value === '' || (int) $value <= 0) {
+            return null;
+        }
+
+        return (int) $value;
+    }
+
+    public function clear_return_of_sale_id(): void
+    {
+        $this->session->remove('return_of_sale_id');
+    }
+
+    /**
+     * How a customer return settles financially: outstanding | credit | cash
+     */
+    public function set_return_settlement(string $mode): void
+    {
+        $allowed = ['outstanding', 'credit', 'cash'];
+        if (!in_array($mode, $allowed, true)) {
+            $mode = 'outstanding';
+        }
+        $this->session->set('return_settlement', $mode);
+    }
+
+    public function get_return_settlement(): string
+    {
+        $mode = (string) ($this->session->get('return_settlement') ?? '');
+        if (!in_array($mode, ['outstanding', 'credit', 'cash'], true)) {
+            return $this->get_return_of_sale_id() !== null ? 'outstanding' : 'credit';
+        }
+
+        return $mode;
+    }
+
+    public function clear_return_settlement(): void
+    {
+        $this->session->remove('return_settlement');
+    }
+
+    /**
+     * AR/cash settlement covers the return without a separate Payment Type tender step.
+     */
+    public function return_settlement_covers_total(): bool
+    {
+        if (!$this->is_return_mode()) {
+            return false;
+        }
+        $mode = $this->get_return_settlement();
+        if (!in_array($mode, ['outstanding', 'credit', 'cash'], true)) {
+            return false;
+        }
+        $customerId = $this->get_customer();
+
+        return $customerId !== NEW_ENTRY && $customerId > 0;
     }
 
     /**
@@ -1435,6 +1570,8 @@ class Sale_lib
         $this->empty_payments();
         $this->remove_customer();
         $this->clear_cash_flags();
+        $this->clear_return_of_sale_id();
+        $this->clear_return_settlement();
     }
 
     /**

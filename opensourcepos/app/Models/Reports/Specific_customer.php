@@ -140,12 +140,15 @@ class Specific_customer extends Report
         ];
 
         $summary['trans_due'] = $this->getDueTotal($inputs);
+        // Outstanding Total (authoritative AR) — not register "Due" tender totals.
+        $summary['outstanding_total'] = $summary['trans_due'];
 
         return $summary;
     }
 
     /**
-     * Sum of Due payment amounts for sales matching the same report filters.
+     * Sum of current outstanding for sales matching the same report filters.
+     * Uses authoritative Customer_account_lib (not SUM of Due payment placeholders).
      */
     private function getDueTotal(array $inputs): float
     {
@@ -159,13 +162,13 @@ class Specific_customer extends Report
             return 0.0;
         }
 
-        $paymentsBuilder = $this->db->table('sales_payments');
-        $paymentsBuilder->select('SUM(payment_amount - cash_refund) AS due_total', false);
-        $paymentsBuilder->where('payment_type', lang('Sales.due'));
-        $paymentsBuilder->whereIn('sale_id', $saleIds);
-        $row = $paymentsBuilder->get()->getRowArray();
+        $accountLib = new \App\Libraries\Customer_account_lib();
+        $total = 0.0;
+        foreach ($saleIds as $saleId) {
+            $total += $accountLib->getSaleOutstanding((int) $saleId);
+        }
 
-        return (float) ($row['due_total'] ?? 0);
+        return round($total, totals_decimals(), PHP_ROUND_HALF_UP);
     }
 
     /**
@@ -184,12 +187,23 @@ class Specific_customer extends Report
             $builder->where('customer_id IS NOT NULL', null, false);
         }
 
-        if ($inputs['payment_type'] == 'invoices') {
+        if (($inputs['payment_type'] ?? 'all') === 'invoices') {
             $builder->where('sale_type', SALE_TYPE_INVOICE);
-        } elseif ($inputs['payment_type'] != 'all') {
-            $builder->like('payment_type', lang('Sales.' . $inputs['payment_type']));
+        } elseif (($inputs['payment_type'] ?? 'all') !== 'all') {
+            // Payment Method filter (Cash/Card/…) — never treat Due or Invoice-as-payment as a tender method.
+            $method = (string) $inputs['payment_type'];
+            if (!in_array($method, ['due', 'Due'], true)) {
+                $langKey = 'Sales.' . $method;
+                $label = lang($langKey);
+                if ($label !== $langKey) {
+                    $builder->like('payment_type', $label);
+                    $builder->where('payment_type !=', lang('Sales.due'));
+                    $builder->where('payment_type !=', 'Due');
+                }
+            }
         }
 
+        // Document Type (sale_type) is separate from Payment Method / Payment Status.
         switch ($inputs['sale_type']) {
             case 'complete':
                 $builder->where('sale_status', COMPLETED);

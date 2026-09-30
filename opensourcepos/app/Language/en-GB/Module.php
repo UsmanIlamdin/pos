@@ -3,6 +3,8 @@
 return [
     "admin_cashups"              => "",
     "admin_cashups_desc"         => "",
+    "accounts"                   => "Customer Accounts",
+    "accounts_desc"              => "Customer receivables, payments, and consolidated invoices.",
     "attributes"                 => "Attributes",
     "attributes_desc"            => "Add, Update, Delete, and Search attributes.",
     "both"                       => "Both",

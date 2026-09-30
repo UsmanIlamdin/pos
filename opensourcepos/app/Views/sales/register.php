@@ -113,6 +113,74 @@ helper('url');
         </div>
     <?= form_close() ?>
 
+    <?php if (($mode ?? '') === 'return'): ?>
+        <?php if (!empty($return_of_sale_label)): ?>
+            <div class="alert alert-info" style="margin-bottom:10px;"><?= esc($return_of_sale_label) ?></div>
+            <?php if (!empty($returnable_items)): ?>
+                <table class="table table-condensed table-bordered" style="margin-bottom:10px; max-width:640px;">
+                    <thead>
+                    <tr>
+                        <th><?= lang('Sales.item_name') ?></th>
+                        <th class="text-right"><?= lang('Sales.return_qty_sold') ?></th>
+                        <th class="text-right"><?= lang('Sales.return_qty_returned') ?></th>
+                        <th class="text-right"><?= lang('Sales.return_qty_remaining') ?></th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($returnable_items as $ri): ?>
+                        <tr>
+                            <td><?= esc($ri['name'] !== '' ? $ri['name'] : ('#' . $ri['item_id'])) ?></td>
+                            <td class="text-right"><?= to_quantity_decimals($ri['sold']) ?></td>
+                            <td class="text-right"><?= to_quantity_decimals($ri['returned']) ?></td>
+                            <td class="text-right"><strong><?= to_quantity_decimals($ri['remaining']) ?></strong></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        <?php else: ?>
+            <div class="alert alert-warning" style="margin-bottom:10px;">
+                <?= esc(lang('Sales.return_not_linked')) ?>
+                <br><small><?= esc(lang('Sales.return_link_hint')) ?></small>
+            </div>
+        <?php endif; ?>
+
+        <?php if (!empty($return_has_customer)): ?>
+            <?php
+            $returnFullyDoneTop = !empty($returnable_items)
+                && empty(array_filter($returnable_items, static fn ($ri) => (float) ($ri['remaining'] ?? 0) > 0.00001));
+            ?>
+            <?php if ($returnFullyDoneTop || count($cart) === 0): ?>
+                <div class="alert alert-warning" style="margin-bottom:10px;"><?= esc(lang('Sales.return_nothing_left')) ?></div>
+            <?php else: ?>
+            <?= form_open("$controller_name/setReturnSettlement", ['id' => 'return_settlement_form', 'class' => 'panel panel-default', 'style' => 'margin-bottom:10px;']) ?>
+                <div class="panel-body">
+                    <label class="control-label"><?= lang('Sales.return_settlement') ?></label>
+                    <div class="radio">
+                        <label>
+                            <?= form_radio('return_settlement', 'outstanding', ($return_settlement ?? '') === 'outstanding', ['onchange' => "$('#return_settlement_form').submit();"]) ?>
+                            <?= lang('Sales.return_settlement_outstanding') ?>
+                        </label>
+                    </div>
+                    <div class="radio">
+                        <label>
+                            <?= form_radio('return_settlement', 'credit', ($return_settlement ?? '') === 'credit', ['onchange' => "$('#return_settlement_form').submit();"]) ?>
+                            <?= lang('Sales.return_settlement_credit') ?>
+                        </label>
+                    </div>
+                    <div class="radio">
+                        <label>
+                            <?= form_radio('return_settlement', 'cash', ($return_settlement ?? '') === 'cash', ['onchange' => "$('#return_settlement_form').submit();"]) ?>
+                            <?= lang('Sales.return_settlement_cash') ?>
+                        </label>
+                    </div>
+                    <small class="help-block"><?= esc(lang('Sales.return_settlement_help')) ?></small>
+                </div>
+            <?= form_close() ?>
+            <?php endif; ?>
+        <?php endif; ?>
+    <?php endif; ?>
+
     <?php $tabindex = 0; ?>
 
     <?= form_open("$controller_name/add", ['id' => 'add_item_form', 'class' => 'form-horizontal panel panel-default']) ?>
@@ -122,7 +190,16 @@ helper('url');
                     <label for="item" class="control-label"><?= lang(ucfirst($controller_name) . '.find_or_scan_item_or_receipt') ?></label>
                 </li>
                 <li class="pull-left">
-                    <?= form_input(['name' => 'item', 'id' => 'item', 'class' => 'form-control input-sm', 'size' => '50', 'tabindex' => ++$tabindex]) ?>
+                    <?= form_input([
+                        'name'        => 'item',
+                        'id'          => 'item',
+                        'class'       => 'form-control input-sm',
+                        'size'        => '50',
+                        'tabindex'    => ++$tabindex,
+                        'placeholder' => ($mode ?? '') === 'return'
+                            ? lang('Sales.return_link_hint')
+                            : lang('Sales.find_or_scan_item_or_receipt'),
+                    ]) ?>
                     <span class="ui-helper-hidden-accessible" role="status"></span>
                 </li>
                 <li class="pull-right">
@@ -390,6 +467,13 @@ helper('url');
             </tr>
         </table>
 
+        <?php
+        // Hide Payment Type for all AR return settlements including cash refund.
+        $arReturnSettlement = ($mode ?? '') === 'return'
+            && !empty($return_has_customer)
+            && in_array($return_settlement ?? '', ['outstanding', 'credit', 'cash'], true);
+        ?>
+
         <?php if (count($cart) > 0) { // Only show this part if there are Items already in the register ?>
             <table class="sales_table_100" id="payment_totals">
                 <tr>
@@ -402,6 +486,7 @@ helper('url');
                 </tr>
             </table>
 
+            <?php if (!$arReturnSettlement): ?>
             <div id="payment_details">
                 <?php if ($payments_cover_total) { // Show Complete sale button instead of Add Payment if there is no amount due left ?>
                     <?= form_open("$controller_name/addPayment", ['id' => 'add_payment_form', 'class' => 'form-horizontal']) ?>
@@ -530,6 +615,11 @@ helper('url');
                     </table>
                 <?php } ?>
             </div>
+            <?php else: ?>
+                <div class="btn btn-sm btn-success pull-right" id="finish_sale_button" tabindex="<?= ++$tabindex ?>">
+                    <span class="glyphicon glyphicon-ok">&nbsp;</span><?= lang(ucfirst($controller_name) . '.complete_sale') ?>
+                </div>
+            <?php endif; ?>
 
             <?= form_open("$controller_name/cancel", ['id' => 'buttons_form']) ?>
             <div class="form-group" id="buttons_sale">

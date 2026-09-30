@@ -77,6 +77,7 @@ return [
     "software_title"                 => "CortexFlow Point of Sale",
     "state"                          => "County",
     "submit"                         => "Submit",
+    "total"                          => "Total",
     "total_spent"                    => "Total Spent",
     "unknown"                        => "Unknown",
     "view_recent_sales"              => "View Recent Sales",
@@ -86,4 +87,5 @@ return [
     "yes"                            => "Yes",
     "you_are_using_ospos"            => "",
     "zip"                            => "Post Code",
+    "none"                           => "WalkIn Customer",
 ];

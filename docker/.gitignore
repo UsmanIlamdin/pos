@@ -1,1 +1,5 @@
 .env.lan
+
+# Database backup files are local deployment data.
+/backups/
+/data/
