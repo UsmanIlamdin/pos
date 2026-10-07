@@ -135,7 +135,9 @@ $invoiceColumns = 6;
                     <span style="padding: 4%;"><?= lang('Accounts.comment') . ': ' . esc($invoice['comment']) ?></span>
                 <?php endif; ?>
             </h5>
-            <div style="padding: 2%;"><?= nl2br(esc($config['return_policy'] ?? '')) ?></div>
+            <?php if (!empty(trim((string) ($config['return_policy'] ?? '')))): ?>
+                <div style="padding: 2%;"><?= nl2br(esc($config['return_policy'] ?? '')) ?></div>
+            <?php endif; ?>
         </div>
         <div id="barcode">
             <?= $barcode ?><br>

@@ -238,7 +238,9 @@ foreach ($payments as $payment_id => $payment) {
                 <span><?= nl2br(esc($config['payment_message'])) ?></span>
                 <span style="padding: 4%;"><?= empty($comments) ? esc($config['invoice_default_comments']) : lang('Sales.comments') . ': ' . esc($comments) ?></span>
             </h5>
-            <div style="padding: 2%;"><?= nl2br(esc($config['return_policy'])) ?></div>
+            <?php if (!empty(trim((string) ($config['return_policy'] ?? '')))): ?>
+                <div style="padding: 2%;"><?= nl2br(esc($config['return_policy'])) ?></div>
+            <?php endif; ?>
         </div>
         <div id="barcode">
             <?= $barcode ?><br>

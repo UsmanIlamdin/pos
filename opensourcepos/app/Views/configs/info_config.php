@@ -134,12 +134,12 @@
             </div>
 
             <div class="form-group form-group-sm">
-                <?= form_label(lang('Common.return_policy'), 'return_policy', ['class' => 'control-label col-xs-2 required']) ?>
+                <?= form_label(lang('Common.return_policy'), 'return_policy', ['class' => 'control-label col-xs-2']) ?>
                 <div class="col-xs-6">
                     <?= form_textarea([
                         'name'  => 'return_policy',
                         'id'    => 'return_policy',
-                        'class' => 'form-control input-sm required',
+                        'class' => 'form-control input-sm',
                         'value' => $config['return_policy']
                     ]) ?>
                 </div>
@@ -175,16 +175,14 @@
                 company: "required",
                 address: "required",
                 phone: "required",
-                email: "email",
-                return_policy: "required"
+                email: "email"
             },
 
             messages: {
                 company: "<?= lang('Config.company_required') ?>",
                 address: "<?= lang('Config.address_required') ?>",
                 phone: "<?= lang('Config.phone_required') ?>",
-                email: "<?= lang('Common.email_invalid_format') ?>",
-                return_policy: "<?= lang('Config.return_policy_required') ?>"
+                email: "<?= lang('Common.email_invalid_format') ?>"
             }
         }));
     });

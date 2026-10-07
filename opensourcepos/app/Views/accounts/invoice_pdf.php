@@ -140,7 +140,9 @@ $summary = $details['summary'] ?? [];
         <?php if (!empty($invoice['comment'])): ?>
             <div style="margin-top: 8px;"><?= lang('Accounts.comment') ?>: <?= esc($invoice['comment']) ?></div>
         <?php endif; ?>
-        <div style="margin-top: 8px;"><?= nl2br(esc($config['return_policy'] ?? '')) ?></div>
+        <?php if (!empty(trim((string) ($config['return_policy'] ?? '')))): ?>
+            <div style="margin-top: 8px;"><?= nl2br(esc($config['return_policy'] ?? '')) ?></div>
+        <?php endif; ?>
         <div id="barcode">
             <?= $barcode ?><br>
             <?= esc($invoice['invoice_number']) ?>

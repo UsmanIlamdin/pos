@@ -79,41 +79,28 @@ class Accounts extends Secure_Controller
         $filters = $this->accountViewFilters();
         $perPage = Customer_account_lib::DEFAULT_PAGE_SIZE;
 
-        $ledgerPage = $this->accountLib->getLedgerPage($customerId, $filters['ledger']['page'], $perPage, $filters['ledger']);
-        $activityPage = $this->accountLib->getAccountActivity($customerId, $filters['activity']['page'], $perPage, $filters['activity']);
-        $invoicePage = $this->invoiceLib->listForCustomerPaginated($customerId, $filters['ci']['page'], $perPage, $filters['ci']);
-        $allInvoices = $this->invoiceLib->listForCustomer($customerId);
+        // Shell page: only load form/summary data. Table sections lazy-load via JSON endpoints.
         $outstandingSalesAll = $this->accountLib->getOutstandingSales($customerId, false);
-        $outstandingSales = $this->accountLib->getOutstandingSales($customerId, false, $filters['outstanding']);
         $payableSales = array_values(array_filter(
             $outstandingSalesAll,
             static fn (array $sale): bool => empty($sale['on_consolidated_invoice'])
         ));
-        $txPage = $this->accountLib->getFinancialTransactions($customerId, $filters['transaction']['page'], $perPage, $filters['transaction']);
+        $allInvoices = $this->invoiceLib->listForCustomer($customerId);
+        $openInvoices = array_values(array_filter(
+            $allInvoices,
+            static fn (array $invoice): bool => !in_array((int) $invoice['status'], [CI_STATUS_CANCELLED, CI_STATUS_PAID], true)
+        ));
 
         $data = [
             'person_info'             => $person,
             'customer_id'             => $customerId,
-            'outstanding_balance'     => $ledgerPage['summary']['outstanding_receivables'] ?? $this->accountLib->getCustomerOutstanding($customerId),
-            'customer_credit'         => $ledgerPage['summary']['customer_credit'] ?? $this->accountLib->getCustomerCreditBalance($customerId),
+            'outstanding_balance'     => $this->accountLib->getCustomerOutstanding($customerId),
+            'customer_credit'         => $this->accountLib->getCustomerCreditBalance($customerId),
             'outstanding_sales_all'   => $outstandingSalesAll,
-            'outstanding_sales'       => $outstandingSales,
             'payable_sales'           => $payableSales,
             'eligible_sales'          => $this->accountLib->getOutstandingSales($customerId, true),
-            'consolidated_invoices'   => $invoicePage['rows'],
-            'invoices_page'           => $invoicePage,
-            'open_invoices'           => array_values(array_filter(
-                $allInvoices,
-                static fn (array $invoice): bool => !in_array((int) $invoice['status'], [CI_STATUS_CANCELLED, CI_STATUS_PAID], true)
-            )),
+            'open_invoices'           => $openInvoices,
             'open_invoice_count'      => $this->invoiceLib->countOpenForCustomer($customerId),
-            'ledger'                  => $ledgerPage['rows'],
-            'ledger_page'             => $ledgerPage,
-            'account_level'           => $ledgerPage['account_level'] ?? [],
-            'transactions'            => $txPage['rows'],
-            'transactions_page'       => $txPage,
-            'activity'                => $activityPage['rows'],
-            'activity_page'           => $activityPage,
             'payment_options'         => $this->accountLib->getAccountPaymentOptions(),
             'reference_types'         => get_reference_code_payment_types(),
             'can_pay'                 => $this->employee->has_grant('accounts_payments', $employeeId),
@@ -131,26 +118,68 @@ class Accounts extends Secure_Controller
         return view('accounts/view', $data);
     }
 
+    public function getOutstanding(int $customerId): ResponseInterface
+    {
+        $filters = $this->accountViewFilters()['outstanding'];
+        $page = max(1, (int) ($this->request->getGet('outstanding_page') ?: $this->request->getGet('page') ?: 1));
+        $perPage = max(1, (int) ($this->request->getGet('per_page') ?: Customer_account_lib::DEFAULT_PAGE_SIZE));
+        $all = $this->accountLib->getOutstandingSales($customerId, false, $filters);
+        $total = count($all);
+        $totalPages = max(1, (int) ceil(($total ?: 1) / $perPage));
+        if ($total === 0) {
+            $totalPages = 1;
+        }
+        if ($page > $totalPages) {
+            $page = $totalPages;
+        }
+        $offset = ($page - 1) * $perPage;
+        $slice = array_slice($all, $offset, $perPage);
+
+        $rows = [];
+        foreach ($slice as $sale) {
+            $rows[] = [
+                'sale_id'        => (int) $sale['sale_id'],
+                'date'           => esc(to_datetime(strtotime((string) $sale['sale_time']))),
+                'invoice_number' => esc((string) ($sale['invoice_number'] ?? '')),
+                'total'          => to_currency($sale['total']),
+                'paid'           => to_currency($sale['paid']),
+                'outstanding'    => to_currency($sale['outstanding']),
+            ];
+        }
+
+        return $this->response->setJSON([
+            'rows'        => $rows,
+            'total'       => $total,
+            'page'        => $page,
+            'per_page'    => $perPage,
+            'total_pages' => $totalPages,
+            'filtered'    => !empty($filters['active']),
+        ]);
+    }
+
     public function getLedger(int $customerId): ResponseInterface
     {
         $filters = $this->accountViewFilters()['ledger'];
-        $page = $filters['page'];
+        $page = $this->resolveSectionPage($filters['page'], 'ledger_page');
         $perPage = max(1, (int) ($this->request->getGet('per_page') ?: Customer_account_lib::DEFAULT_PAGE_SIZE));
         $result = $this->accountLib->getLedgerPage($customerId, $page, $perPage, $filters);
+        $employeeId = (int) $this->employee->get_logged_in_employee_info()->person_id;
+        $canVoid = $this->employee->has_grant('accounts_void', $employeeId);
+        $canReallocate = $this->employee->has_grant('accounts_reallocate', $employeeId);
 
         $rows = [];
         foreach ($result['rows'] as $row) {
             $children = [];
             foreach ($row['children'] ?? [] as $child) {
                 $children[] = [
-                    'source'         => $child['source'],
-                    'date'           => esc(to_datetime(strtotime((string) ($child['date'] ?? '')))),
-                    'reference'      => esc((string) ($child['reference'] ?? '')),
-                    'amount'         => to_currency($child['amount'] ?? $child['credit'] ?? 0),
-                    'payment_id'     => $child['payment_id'] ?? null,
+                    'source'           => $child['source'],
+                    'date'             => esc(to_datetime(strtotime((string) ($child['date'] ?? '')))),
+                    'reference'        => esc((string) ($child['reference'] ?? '')),
+                    'amount'           => to_currency($child['amount'] ?? $child['credit'] ?? 0),
+                    'payment_id'       => $child['payment_id'] ?? null,
                     'return_credit_id' => $child['return_credit_id'] ?? null,
-                    'can_void'       => !empty($child['can_void']),
-                    'can_reallocate' => !empty($child['can_reallocate']),
+                    'can_void'         => $canVoid && !empty($child['can_void']) && ($child['source'] ?? '') === 'account',
+                    'can_reallocate'   => $canReallocate && !empty($child['can_reallocate']) && ($child['source'] ?? '') === 'account',
                 ];
             }
             $rows[] = [
@@ -167,8 +196,9 @@ class Accounts extends Secure_Controller
         }
 
         return $this->response->setJSON(array_merge($result, [
-            'rows'    => $rows,
-            'summary' => [
+            'rows'     => $rows,
+            'filtered' => !empty($filters['active']),
+            'summary'  => [
                 'outstanding_receivables' => to_currency($result['summary']['outstanding_receivables'] ?? 0),
                 'customer_credit'         => to_currency($result['summary']['customer_credit'] ?? 0),
                 'outstanding_sales_count' => (int) ($result['summary']['outstanding_sales_count'] ?? 0),
@@ -180,7 +210,7 @@ class Accounts extends Secure_Controller
     public function getTransactions(int $customerId): ResponseInterface
     {
         $filters = $this->accountViewFilters()['transaction'];
-        $page = $filters['page'];
+        $page = $this->resolveSectionPage($filters['page'], 'transaction_page');
         $perPage = max(1, (int) ($this->request->getGet('per_page') ?: Customer_account_lib::DEFAULT_PAGE_SIZE));
         $result = $this->accountLib->getFinancialTransactions($customerId, $page, $perPage, $filters);
 
@@ -197,13 +227,16 @@ class Accounts extends Secure_Controller
             ];
         }
 
-        return $this->response->setJSON(array_merge($result, ['rows' => $rows]));
+        return $this->response->setJSON(array_merge($result, [
+            'rows'     => $rows,
+            'filtered' => !empty($filters['active']),
+        ]));
     }
 
     public function getActivity(int $customerId): ResponseInterface
     {
         $filters = $this->accountViewFilters()['activity'];
-        $page = $filters['page'];
+        $page = $this->resolveSectionPage($filters['page'], 'activity_page');
         $perPage = max(1, (int) ($this->request->getGet('per_page') ?: Customer_account_lib::DEFAULT_PAGE_SIZE));
         $result = $this->accountLib->getAccountActivity($customerId, $page, $perPage, $filters);
 
@@ -216,13 +249,16 @@ class Accounts extends Secure_Controller
             ];
         }
 
-        return $this->response->setJSON(array_merge($result, ['rows' => $rows]));
+        return $this->response->setJSON(array_merge($result, [
+            'rows'     => $rows,
+            'filtered' => !empty($filters['active']),
+        ]));
     }
 
     public function getInvoices(int $customerId): ResponseInterface
     {
         $filters = $this->accountViewFilters()['ci'];
-        $page = $filters['page'];
+        $page = $this->resolveSectionPage($filters['page'], 'ci_page');
         $perPage = max(1, (int) ($this->request->getGet('per_page') ?: Customer_account_lib::DEFAULT_PAGE_SIZE));
         $result = $this->invoiceLib->listForCustomerPaginated($customerId, $page, $perPage, $filters);
         $statusLabels = $this->statusLabels();
@@ -241,7 +277,10 @@ class Accounts extends Secure_Controller
             ];
         }
 
-        return $this->response->setJSON(array_merge($result, ['rows' => $rows]));
+        return $this->response->setJSON(array_merge($result, [
+            'rows'     => $rows,
+            'filtered' => !empty($filters['active']),
+        ]));
     }
 
     public function postPayment(int $customerId): ResponseInterface
@@ -725,7 +764,7 @@ class Accounts extends Secure_Controller
             'from'   => $date('outstanding_from'),
             'to'     => $date('outstanding_to'),
             'status' => $pick($get('outstanding_status'), ['unpaid', 'partially_paid']),
-            'page'   => 1,
+            'page'   => $pageOf('outstanding_page'),
         ];
         $ci = [
             'search'  => $get('ci_search'),
@@ -786,6 +825,16 @@ class Accounts extends Secure_Controller
             'transaction' => $markActive($transaction),
             'activity'    => $markActive($activity),
         ];
+    }
+
+    private function resolveSectionPage(int $sectionPage, string $sectionParam): int
+    {
+        $generic = (int) $this->request->getGet('page');
+        if ($generic > 0 && (int) $this->request->getGet($sectionParam) <= 0) {
+            return max(1, $generic);
+        }
+
+        return max(1, $sectionPage);
     }
 
     /**

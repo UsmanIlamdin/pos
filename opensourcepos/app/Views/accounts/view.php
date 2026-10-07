@@ -3,16 +3,10 @@
  * @var object $person_info
  * @var int $customer_id
  * @var float $outstanding_balance
- * @var array $outstanding_sales
  * @var array $payable_sales
  * @var array $eligible_sales
- * @var array $consolidated_invoices
- * @var array $invoices_page
+ * @var array $open_invoices
  * @var int $open_invoice_count
- * @var array $transactions
- * @var array $transactions_page
- * @var array $activity
- * @var array $activity_page
  * @var array $payment_options
  * @var array $reference_types
  * @var bool $can_pay
@@ -20,12 +14,11 @@
  * @var bool $can_cancel
  * @var array $status_labels
  * @var int $per_page
+ * @var array $account_filters
+ * @var array $outstanding_sales_all
  */
 
-$openInvoices = $open_invoices ?? array_values(array_filter(
-    $consolidated_invoices,
-    static fn ($i) => !in_array((int) $i['status'], [CI_STATUS_CANCELLED, CI_STATUS_PAID], true)
-));
+$openInvoices = $open_invoices ?? [];
 $defaultSaleId = count($payable_sales) === 1 ? (int) $payable_sales[0]['sale_id'] : '';
 $account_filters = $account_filters ?? [
     'outstanding' => ['search' => '', 'from' => '', 'to' => '', 'status' => '', 'active' => false],
@@ -34,40 +27,12 @@ $account_filters = $account_filters ?? [
     'transaction' => ['search' => '', 'from' => '', 'to' => '', 'type' => '', 'side' => '', 'page' => 1, 'active' => false],
     'activity'    => ['search' => '', 'from' => '', 'to' => '', 'type' => '', 'voided' => '', 'page' => 1, 'active' => false],
 ];
-$outstanding_sales_all = $outstanding_sales_all ?? $outstanding_sales;
-$viewBase = site_url('accounts/view/' . (int) $customer_id);
-$filterParamMap = [
-    'outstanding' => ['search' => 'outstanding_search', 'from' => 'outstanding_from', 'to' => 'outstanding_to', 'status' => 'outstanding_status'],
-    'ci'          => ['search' => 'ci_search', 'from' => 'ci_from', 'to' => 'ci_to', 'status' => 'ci_status', 'balance' => 'ci_balance', 'page' => 'ci_page'],
-    'ledger'      => ['search' => 'ledger_search', 'from' => 'ledger_from', 'to' => 'ledger_to', 'status' => 'ledger_status', 'page' => 'ledger_page'],
-    'transaction' => ['search' => 'transaction_search', 'from' => 'transaction_from', 'to' => 'transaction_to', 'type' => 'transaction_type', 'side' => 'transaction_side', 'page' => 'transaction_page'],
-    'activity'    => ['search' => 'activity_search', 'from' => 'activity_from', 'to' => 'activity_to', 'type' => 'activity_type', 'voided' => 'activity_voided', 'page' => 'activity_page'],
-];
-$buildFilterQuery = static function (?string $except = null) use ($account_filters, $filterParamMap): array {
-    $query = [];
-    foreach ($filterParamMap as $section => $fields) {
-        if ($section === $except) {
-            continue;
-        }
-        foreach ($fields as $key => $name) {
-            $value = $account_filters[$section][$key] ?? '';
-            if ($value === '' || $value === null || $key === 'active') {
-                continue;
-            }
-            if ($key === 'page' && (int) $value <= 1) {
-                continue;
-            }
-            $query[$name] = $value;
-        }
-    }
-
-    return $query;
-};
-$filterResetUrl = static function (string $except) use ($viewBase, $buildFilterQuery): string {
-    $query = $buildFilterQuery($except);
-
-    return $query === [] ? $viewBase : $viewBase . '?' . http_build_query($query);
-};
+$outstanding_sales_all = $outstanding_sales_all ?? [];
+$can_void = $can_void ?? false;
+$can_reallocate = $can_reallocate ?? false;
+$can_credit_apply = $can_credit_apply ?? false;
+$can_refund = $can_refund ?? false;
+$customer_credit = $customer_credit ?? 0;
 $typeChoices = [
     ''                     => lang('Accounts.filter_all'),
     'sale'                 => lang('Accounts.filter_type_sale'),
@@ -81,6 +46,7 @@ $typeChoices = [
 ?>
 
 <?= view('partial/header') ?>
+<?= view('accounts/partials/accounts_view_script') ?>
 
 <script type="text/javascript">
     $(document).ready(function() {
@@ -159,18 +125,37 @@ $typeChoices = [
 
         $(document).on('click', '.void-payment', function() {
             const paymentId = $(this).data('payment-id');
-            if (!paymentId || !confirm('<?= lang('Accounts.void_payment') ?>?')) {
+            if (!paymentId) {
                 return;
             }
+            $('#void-payment-id').val(paymentId);
+            $('#void-payment-modal').modal('show');
+        });
+
+        $(document).on('click', '#confirm-void-payment', function() {
+            const paymentId = $('#void-payment-id').val();
+            if (!paymentId) {
+                return;
+            }
+
+            const $button = $(this);
+            $button.prop('disabled', true);
             $.post('<?= site_url('accounts/voidPayment') ?>/' + paymentId, {
                 void_reason: '',
                 idempotency_key: uuid()
             }, function(response) {
                 $.notify({ message: response.message }, { type: response.success ? 'success' : 'danger' });
                 if (response.success) {
+                    $('#void-payment-modal').modal('hide');
                     window.location.reload();
                 }
-            }, 'json');
+            }, 'json').always(function() {
+                $button.prop('disabled', false);
+            });
+        });
+
+        $('#void-payment-modal').on('hidden.bs.modal', function() {
+            $('#void-payment-id').val('');
         });
 
         $(document).on('click', '.reallocate-payment', function() {
@@ -254,6 +239,37 @@ $typeChoices = [
 
         $(document).on('change', 'input[name="sale_ids[]"]', updateSelectedTotal);
         updateSelectedTotal();
+
+        AccountsViewLazy.init({
+            customerId: customerId,
+            perPage: <?= (int) $per_page ?>,
+            urls: {
+                outstanding: <?= json_encode(site_url('accounts/outstanding/' . (int) $customer_id)) ?>,
+                invoices: <?= json_encode(site_url('accounts/invoices/' . (int) $customer_id)) ?>,
+                ledger: <?= json_encode(site_url('accounts/ledger/' . (int) $customer_id)) ?>,
+                transactions: <?= json_encode(site_url('accounts/transactions/' . (int) $customer_id)) ?>,
+                activity: <?= json_encode(site_url('accounts/activity/' . (int) $customer_id)) ?>
+            },
+            labels: {
+                showing: <?= json_encode(lang('Accounts.showing_rows')) ?>,
+                of: <?= json_encode(lang('Accounts.pagination_of')) ?>,
+                loading: <?= json_encode(lang('Accounts.loading_records')) ?>,
+                loadMore: <?= json_encode(lang('Accounts.load_more')) ?>,
+                error: <?= json_encode(lang('Accounts.load_error')) ?>,
+                voidPayment: <?= json_encode(lang('Accounts.void_payment')) ?>,
+                changeAllocation: <?= json_encode(lang('Accounts.change_allocation')) ?>,
+                noOutstanding: <?= json_encode(lang('Accounts.no_outstanding_sales')) ?>,
+                noOutstandingFiltered: <?= json_encode(lang('Accounts.no_outstanding_sales_filtered')) ?>,
+                noCi: <?= json_encode(lang('Accounts.no_consolidated_invoices')) ?>,
+                noCiFiltered: <?= json_encode(lang('Accounts.no_consolidated_invoices_filtered')) ?>,
+                noLedger: <?= json_encode(lang('Accounts.no_ledger_records')) ?>,
+                noLedgerFiltered: <?= json_encode(lang('Accounts.no_ledger_records_filtered')) ?>,
+                noTx: <?= json_encode(lang('Accounts.no_account_transactions')) ?>,
+                noTxFiltered: <?= json_encode(lang('Accounts.no_account_transactions_filtered')) ?>,
+                noActivity: <?= json_encode(lang('Accounts.no_account_activity')) ?>,
+                noActivityFiltered: <?= json_encode(lang('Accounts.no_account_activity_filtered')) ?>
+            }
+        });
     });
 </script>
 <style>
@@ -280,9 +296,10 @@ $typeChoices = [
         min-width: 160px;
         padding-bottom: 1px;
     }
-    .account-pager {
-        margin-top: 8px;
-    }
+    .section-pager { margin-top: 8px; }
+    .section-load-more { margin-top: 8px; }
+    .section-loading, .section-error { margin: 8px 0; }
+    .section-error { color: #a94442; }
     @media (max-width: 767px) {
         .account-filter-field,
         .account-filter-actions {
@@ -408,17 +425,14 @@ $typeChoices = [
     <?php endif; ?>
 </div>
 
-<div class="panel panel-default">
+<div class="panel panel-default account-section" id="section-outstanding">
     <div class="panel-heading"><?= lang('Accounts.outstanding_sales') ?></div>
     <div class="panel-body">
         <?= view('accounts/partials/section_filters', [
-            'action'              => $viewBase,
             'prefix'              => 'outstanding',
             'filters'             => $account_filters['outstanding'],
-            'all_filters'         => $account_filters,
             'search_name'         => 'outstanding_search',
             'search_placeholder'  => lang('Accounts.outstanding_search_placeholder'),
-            'reset_url'           => $filterResetUrl('outstanding'),
             'selects'             => [
                 'outstanding_status' => [
                     'label'   => lang('Accounts.status'),
@@ -431,11 +445,11 @@ $typeChoices = [
                 ],
             ],
         ]) ?>
-        <?php if ($outstanding_sales === []): ?>
-            <p><?= !empty($account_filters['outstanding']['active'])
-                ? lang('Accounts.no_outstanding_sales_filtered')
-                : lang('Accounts.no_outstanding_sales') ?></p>
-        <?php else: ?>
+        <p class="section-meta text-muted"></p>
+        <div class="section-loading" style="display:none;"><?= lang('Accounts.loading_records') ?></div>
+        <div class="section-error" style="display:none;"></div>
+        <div class="section-empty" style="display:none;"></div>
+        <div class="section-table-wrap" style="display:none;">
             <table class="table table-striped table-hover">
                 <thead>
                 <tr>
@@ -447,20 +461,11 @@ $typeChoices = [
                     <th class="text-right"><?= lang('Accounts.balance_due') ?></th>
                 </tr>
                 </thead>
-                <tbody>
-                <?php foreach ($outstanding_sales as $sale): ?>
-                    <tr>
-                        <td><?= (int) $sale['sale_id'] ?></td>
-                        <td><?= esc(to_datetime(strtotime($sale['sale_time']))) ?></td>
-                        <td><?= esc($sale['invoice_number'] ?? '') ?></td>
-                        <td class="text-right"><?= to_currency($sale['total']) ?></td>
-                        <td class="text-right"><?= to_currency($sale['paid']) ?></td>
-                        <td class="text-right"><?= to_currency($sale['outstanding']) ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
+                <tbody class="section-body"></tbody>
             </table>
-        <?php endif; ?>
+        </div>
+        <div class="section-pager"></div>
+        <button type="button" class="btn btn-default btn-sm section-load-more" style="display:none;"><?= lang('Accounts.load_more') ?></button>
     </div>
 </div>
 
@@ -514,17 +519,14 @@ $typeChoices = [
     </div>
 <?php endif; ?>
 
-<div class="panel panel-default">
+<div class="panel panel-default account-section" id="section-ci">
     <div class="panel-heading"><?= lang('Accounts.consolidated_invoices') ?></div>
     <div class="panel-body">
         <?= view('accounts/partials/section_filters', [
-            'action'              => $viewBase,
             'prefix'              => 'ci',
             'filters'             => $account_filters['ci'],
-            'all_filters'         => $account_filters,
             'search_name'         => 'ci_search',
             'search_placeholder'  => lang('Accounts.ci_search_placeholder'),
-            'reset_url'           => $filterResetUrl('ci'),
             'selects'             => [
                 'ci_status' => [
                     'label'   => lang('Accounts.status'),
@@ -547,17 +549,11 @@ $typeChoices = [
                 ],
             ],
         ]) ?>
-        <p id="ci-meta">
-            <?= lang('Accounts.showing_rows') ?>
-            <?= $invoices_page['total'] ? (($invoices_page['page'] - 1) * $invoices_page['per_page'] + 1) : 0 ?>
-            –<?= min($invoices_page['page'] * $invoices_page['per_page'], $invoices_page['total']) ?>
-            <?= lang('Accounts.pagination_of') ?> <?= (int) $invoices_page['total'] ?>
-        </p>
-        <?php if ($consolidated_invoices === []): ?>
-            <p><?= !empty($account_filters['ci']['active'])
-                ? lang('Accounts.no_consolidated_invoices_filtered')
-                : lang('Accounts.no_consolidated_invoices') ?></p>
-        <?php else: ?>
+        <p class="section-meta text-muted"></p>
+        <div class="section-loading" style="display:none;"><?= lang('Accounts.loading_records') ?></div>
+        <div class="section-error" style="display:none;"></div>
+        <div class="section-empty" style="display:none;"></div>
+        <div class="section-table-wrap" style="display:none;">
             <table class="table table-striped table-hover">
                 <thead>
                 <tr>
@@ -570,50 +566,22 @@ $typeChoices = [
                     <th></th>
                 </tr>
                 </thead>
-                <tbody id="ci-body">
-                <?php foreach ($consolidated_invoices as $invoice): ?>
-                    <tr>
-                        <td><?= esc($invoice['invoice_number']) ?></td>
-                        <td><?= esc($invoice['invoice_date']) ?></td>
-                        <td><?= esc($status_labels[(int) $invoice['status']] ?? $invoice['status']) ?></td>
-                        <td class="text-right"><?= to_currency($invoice['total_amount']) ?></td>
-                        <td class="text-right"><?= to_currency($invoice['paid']) ?></td>
-                        <td class="text-right"><?= to_currency($invoice['balance']) ?></td>
-                        <td><?= anchor('accounts/invoice/' . $invoice['consolidated_invoice_id'], lang('Accounts.view_account')) ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
+                <tbody class="section-body"></tbody>
             </table>
-            <?= view('accounts/partials/section_pager', [
-                'page_data'  => $invoices_page,
-                'page_param' => 'ci_page',
-                'query'      => $buildFilterQuery(),
-                'base_url'   => $viewBase,
-            ]) ?>
-        <?php endif; ?>
+        </div>
+        <div class="section-pager"></div>
+        <button type="button" class="btn btn-default btn-sm section-load-more" style="display:none;"><?= lang('Accounts.load_more') ?></button>
     </div>
 </div>
 
-<div class="panel panel-default">
+<div class="panel panel-default account-section" id="section-ledger">
     <div class="panel-heading"><?= lang('Accounts.ledger') ?></div>
     <div class="panel-body">
-        <?php
-        $ledger = $ledger ?? [];
-        $ledger_page = $ledger_page ?? ['total' => 0, 'page' => 1, 'per_page' => $per_page, 'total_pages' => 1];
-        $can_void = $can_void ?? false;
-        $can_reallocate = $can_reallocate ?? false;
-        $can_credit_apply = $can_credit_apply ?? false;
-        $can_refund = $can_refund ?? false;
-        $customer_credit = $customer_credit ?? 0;
-        ?>
         <?= view('accounts/partials/section_filters', [
-            'action'              => $viewBase,
             'prefix'              => 'ledger',
             'filters'             => $account_filters['ledger'],
-            'all_filters'         => $account_filters,
             'search_name'         => 'ledger_search',
             'search_placeholder'  => lang('Accounts.ledger_search_placeholder'),
-            'reset_url'           => $filterResetUrl('ledger'),
             'selects'             => [
                 'ledger_status' => [
                     'label'   => lang('Accounts.status'),
@@ -627,17 +595,11 @@ $typeChoices = [
                 ],
             ],
         ]) ?>
-        <p id="ledger-meta">
-            <?= lang('Accounts.showing_rows') ?>
-            <?= $ledger_page['total'] ? (($ledger_page['page'] - 1) * $ledger_page['per_page'] + 1) : 0 ?>
-            –<?= min($ledger_page['page'] * $ledger_page['per_page'], $ledger_page['total']) ?>
-            <?= lang('Accounts.pagination_of') ?> <?= (int) $ledger_page['total'] ?>
-        </p>
-        <?php if ($ledger === []): ?>
-            <p><?= !empty($account_filters['ledger']['active'])
-                ? lang('Accounts.no_ledger_records_filtered')
-                : lang('Accounts.no_ledger_records') ?></p>
-        <?php else: ?>
+        <p class="section-meta text-muted"></p>
+        <div class="section-loading" style="display:none;"><?= lang('Accounts.loading_records') ?></div>
+        <div class="section-error" style="display:none;"></div>
+        <div class="section-empty" style="display:none;"></div>
+        <div class="section-table-wrap" style="display:none;">
             <table class="table table-striped table-hover" id="ledger-table">
                 <thead>
                 <tr>
@@ -651,47 +613,11 @@ $typeChoices = [
                     <th><?= lang('Accounts.status') ?></th>
                 </tr>
                 </thead>
-                <tbody id="ledger-body">
-                <?php foreach ($ledger as $row): ?>
-                    <tr class="ledger-parent" data-sale-id="<?= (int) $row['sale_id'] ?>">
-                        <td><button type="button" class="btn btn-xs btn-default ledger-toggle">+</button></td>
-                        <td><?= esc(to_datetime(strtotime((string) $row['date']))) ?></td>
-                        <td><?= esc($row['reference']) ?></td>
-                        <td class="text-right"><?= to_currency($row['sale_total']) ?></td>
-                        <td class="text-right"><?= to_currency($row['payments']) ?></td>
-                        <td class="text-right"><?= to_currency($row['credits']) ?></td>
-                        <td class="text-right"><?= to_currency($row['balance']) ?></td>
-                        <td><?= esc($row['status']) ?></td>
-                    </tr>
-                    <?php foreach ($row['children'] ?? [] as $child): ?>
-                        <tr class="ledger-child" data-parent="<?= (int) $row['sale_id'] ?>" style="display:none; background:#f9f9f9;">
-                            <td></td>
-                            <td><?= esc(to_datetime(strtotime((string) ($child['date'] ?? '')))) ?></td>
-                            <td colspan="2">
-                                <?= esc($child['reference'] ?? '') ?>
-                                <small>(<?= esc($child['source'] ?? '') ?>)</small>
-                            </td>
-                            <td class="text-right" colspan="2"><?= to_currency($child['amount'] ?? $child['credit'] ?? 0) ?></td>
-                            <td colspan="2">
-                                <?php if (!empty($child['can_void']) && $can_void && ($child['source'] ?? '') === 'account'): ?>
-                                    <button type="button" class="btn btn-xs btn-danger void-payment" data-payment-id="<?= (int) ($child['payment_id'] ?? 0) ?>"><?= lang('Accounts.void_payment') ?></button>
-                                <?php endif; ?>
-                                <?php if (!empty($child['can_reallocate']) && $can_reallocate && ($child['source'] ?? '') === 'account'): ?>
-                                    <button type="button" class="btn btn-xs btn-warning reallocate-payment" data-payment-id="<?= (int) ($child['payment_id'] ?? 0) ?>" title="<?= esc(lang('Accounts.change_allocation_help')) ?>"><?= lang('Accounts.change_allocation') ?></button>
-                                <?php endif; ?>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                <?php endforeach; ?>
-                </tbody>
+                <tbody class="section-body"></tbody>
             </table>
-            <?= view('accounts/partials/section_pager', [
-                'page_data'  => $ledger_page,
-                'page_param' => 'ledger_page',
-                'query'      => $buildFilterQuery(),
-                'base_url'   => $viewBase,
-            ]) ?>
-        <?php endif; ?>
+        </div>
+        <div class="section-pager"></div>
+        <button type="button" class="btn btn-default btn-sm section-load-more" style="display:none;"><?= lang('Accounts.load_more') ?></button>
 
         <?php if (($customer_credit ?? 0) > 0 && ($can_credit_apply || $can_refund)): ?>
             <hr>
@@ -740,17 +666,14 @@ $typeChoices = [
     </div>
 </div>
 
-<div class="panel panel-default">
+<div class="panel panel-default account-section" id="section-tx">
     <div class="panel-heading"><?= lang('Accounts.account_transactions') ?></div>
     <div class="panel-body">
         <?= view('accounts/partials/section_filters', [
-            'action'              => $viewBase,
             'prefix'              => 'transaction',
             'filters'             => $account_filters['transaction'],
-            'all_filters'         => $account_filters,
             'search_name'         => 'transaction_search',
             'search_placeholder'  => lang('Accounts.transaction_search_placeholder'),
-            'reset_url'           => $filterResetUrl('transaction'),
             'selects'             => [
                 'transaction_type' => [
                     'label'   => lang('Accounts.filter_type'),
@@ -768,17 +691,11 @@ $typeChoices = [
                 ],
             ],
         ]) ?>
-        <p id="tx-meta">
-            <?= lang('Accounts.showing_rows') ?>
-            <?= $transactions_page['total'] ? (($transactions_page['page'] - 1) * $transactions_page['per_page'] + 1) : 0 ?>
-            –<?= min($transactions_page['page'] * $transactions_page['per_page'], $transactions_page['total']) ?>
-            <?= lang('Accounts.pagination_of') ?> <?= (int) $transactions_page['total'] ?>
-        </p>
-        <?php if ($transactions === []): ?>
-            <p><?= !empty($account_filters['transaction']['active'])
-                ? lang('Accounts.no_account_transactions_filtered')
-                : lang('Accounts.no_account_transactions') ?></p>
-        <?php else: ?>
+        <p class="section-meta text-muted"></p>
+        <div class="section-loading" style="display:none;"><?= lang('Accounts.loading_records') ?></div>
+        <div class="section-error" style="display:none;"></div>
+        <div class="section-empty" style="display:none;"></div>
+        <div class="section-table-wrap" style="display:none;">
             <table class="table table-striped table-hover">
                 <thead>
                 <tr>
@@ -789,47 +706,22 @@ $typeChoices = [
                     <th class="text-right"><?= lang('Accounts.balance') ?></th>
                 </tr>
                 </thead>
-                <tbody id="tx-body">
-                <?php foreach ($transactions as $row): ?>
-                    <tr>
-                        <td><?= esc(to_datetime(strtotime((string) $row['date']))) ?></td>
-                        <td>
-                            <?= esc($row['reference']) ?>
-                            <?php if (!empty($row['allocated_to'])): ?>
-                                <br><small><?= esc($row['allocated_to']) ?></small>
-                            <?php endif; ?>
-                            <?php if (!empty($row['memo'])): ?>
-                                <br><small><?= esc($row['memo']) ?></small>
-                            <?php endif; ?>
-                        </td>
-                        <td class="text-right"><?= $row['debit'] ? to_currency($row['debit']) : '' ?></td>
-                        <td class="text-right"><?= $row['credit'] ? to_currency($row['credit']) : '' ?></td>
-                        <td class="text-right"><?= to_currency($row['balance']) ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
+                <tbody class="section-body"></tbody>
             </table>
-            <?= view('accounts/partials/section_pager', [
-                'page_data'  => $transactions_page,
-                'page_param' => 'transaction_page',
-                'query'      => $buildFilterQuery(),
-                'base_url'   => $viewBase,
-            ]) ?>
-        <?php endif; ?>
+        </div>
+        <div class="section-pager"></div>
+        <button type="button" class="btn btn-default btn-sm section-load-more" style="display:none;"><?= lang('Accounts.load_more') ?></button>
     </div>
 </div>
 
-<div class="panel panel-default">
+<div class="panel panel-default account-section" id="section-activity">
     <div class="panel-heading"><?= lang('Accounts.account_activity') ?></div>
     <div class="panel-body">
         <?= view('accounts/partials/section_filters', [
-            'action'              => $viewBase,
             'prefix'              => 'activity',
             'filters'             => $account_filters['activity'],
-            'all_filters'         => $account_filters,
             'search_name'         => 'activity_search',
             'search_placeholder'  => lang('Accounts.activity_search_placeholder'),
-            'reset_url'           => $filterResetUrl('activity'),
             'selects'             => [
                 'activity_type' => [
                     'label'   => lang('Accounts.filter_type'),
@@ -847,17 +739,11 @@ $typeChoices = [
                 ],
             ],
         ]) ?>
-        <p id="activity-meta">
-            <?= lang('Accounts.showing_rows') ?>
-            <?= $activity_page['total'] ? (($activity_page['page'] - 1) * $activity_page['per_page'] + 1) : 0 ?>
-            –<?= min($activity_page['page'] * $activity_page['per_page'], $activity_page['total']) ?>
-            <?= lang('Accounts.pagination_of') ?> <?= (int) $activity_page['total'] ?>
-        </p>
-        <?php if ($activity === []): ?>
-            <p><?= !empty($account_filters['activity']['active'])
-                ? lang('Accounts.no_account_activity_filtered')
-                : lang('Accounts.no_account_activity') ?></p>
-        <?php else: ?>
+        <p class="section-meta text-muted"></p>
+        <div class="section-loading" style="display:none;"><?= lang('Accounts.loading_records') ?></div>
+        <div class="section-error" style="display:none;"></div>
+        <div class="section-empty" style="display:none;"></div>
+        <div class="section-table-wrap" style="display:none;">
             <table class="table table-striped table-hover">
                 <thead>
                 <tr>
@@ -866,27 +752,13 @@ $typeChoices = [
                     <th><?= lang('Common.comments') ?></th>
                 </tr>
                 </thead>
-                <tbody id="activity-body">
-                <?php foreach ($activity as $row): ?>
-                    <tr>
-                        <td><?= esc($row['date']) ?></td>
-                        <td><?= esc($row['reference']) ?></td>
-                        <td><?= esc($row['memo'] ?? '') ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
+                <tbody class="section-body"></tbody>
             </table>
-            <?= view('accounts/partials/section_pager', [
-                'page_data'  => $activity_page,
-                'page_param' => 'activity_page',
-                'query'      => $buildFilterQuery(),
-                'base_url'   => $viewBase,
-            ]) ?>
-        <?php endif; ?>
+        </div>
+        <div class="section-pager"></div>
+        <button type="button" class="btn btn-default btn-sm section-load-more" style="display:none;"><?= lang('Accounts.load_more') ?></button>
     </div>
 </div>
-
-<?= view('partial/footer') ?>
 
 <div class="modal fade" id="reallocate-modal" tabindex="-1" role="dialog" aria-labelledby="reallocate-title">
     <div class="modal-dialog" role="document">
@@ -913,3 +785,26 @@ $typeChoices = [
         </div>
     </div>
 </div>
+
+<div class="modal fade" id="void-payment-modal" tabindex="-1" role="dialog" aria-labelledby="void-payment-title">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                <h4 class="modal-title" id="void-payment-title"><?= lang('Accounts.void_payment') ?></h4>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="void-payment-id" value="">
+                <p>Are you sure you want to void this payment?</p>
+                <p class="help-block">This will mark the payment as voided and remove its effect from the customer account.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal"><?= lang('Common.cancel') ?></button>
+                <button type="button" class="btn btn-danger" id="confirm-void-payment"><?= lang('Accounts.void_payment') ?></button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?= view('partial/footer') ?>
+
