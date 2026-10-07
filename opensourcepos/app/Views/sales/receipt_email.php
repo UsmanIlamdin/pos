@@ -153,9 +153,11 @@
     </table>
 
     <div id="terms">
-        <div id="sale_return_policy" style="text-align: center;">
-            <?= nl2br(esc($config['return_policy'])) ?>
-        </div>
+        <?php if (!empty(trim((string) ($config['return_policy'] ?? '')))): ?>
+            <div id="sale_return_policy" style="text-align: center;">
+                <?= nl2br(esc($config['return_policy'])) ?>
+            </div>
+        <?php endif; ?>
 
         <div id="barcode" style="text-align: center;">
             <img alt=<?= '$sale_id' ?> src="data:image/svg+xml;base64,<?= base64_encode($barcode) ?>"><br>

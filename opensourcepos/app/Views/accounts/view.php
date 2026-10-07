@@ -159,18 +159,37 @@ $typeChoices = [
 
         $(document).on('click', '.void-payment', function() {
             const paymentId = $(this).data('payment-id');
-            if (!paymentId || !confirm('<?= lang('Accounts.void_payment') ?>?')) {
+            if (!paymentId) {
                 return;
             }
+            $('#void-payment-id').val(paymentId);
+            $('#void-payment-modal').modal('show');
+        });
+
+        $(document).on('click', '#confirm-void-payment', function() {
+            const paymentId = $('#void-payment-id').val();
+            if (!paymentId) {
+                return;
+            }
+
+            const $button = $(this);
+            $button.prop('disabled', true);
             $.post('<?= site_url('accounts/voidPayment') ?>/' + paymentId, {
                 void_reason: '',
                 idempotency_key: uuid()
             }, function(response) {
                 $.notify({ message: response.message }, { type: response.success ? 'success' : 'danger' });
                 if (response.success) {
+                    $('#void-payment-modal').modal('hide');
                     window.location.reload();
                 }
-            }, 'json');
+            }, 'json').always(function() {
+                $button.prop('disabled', false);
+            });
+        });
+
+        $('#void-payment-modal').on('hidden.bs.modal', function() {
+            $('#void-payment-id').val('');
         });
 
         $(document).on('click', '.reallocate-payment', function() {
@@ -886,8 +905,6 @@ $typeChoices = [
     </div>
 </div>
 
-<?= view('partial/footer') ?>
-
 <div class="modal fade" id="reallocate-modal" tabindex="-1" role="dialog" aria-labelledby="reallocate-title">
     <div class="modal-dialog" role="document">
         <div class="modal-content">
@@ -913,3 +930,26 @@ $typeChoices = [
         </div>
     </div>
 </div>
+
+<div class="modal fade" id="void-payment-modal" tabindex="-1" role="dialog" aria-labelledby="void-payment-title">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                <h4 class="modal-title" id="void-payment-title"><?= lang('Accounts.void_payment') ?></h4>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="void-payment-id" value="">
+                <p>Are you sure you want to void this payment?</p>
+                <p class="help-block">This will mark the payment as voided and remove its effect from the customer account.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal"><?= lang('Common.cancel') ?></button>
+                <button type="button" class="btn btn-danger" id="confirm-void-payment"><?= lang('Accounts.void_payment') ?></button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?= view('partial/footer') ?>
+

@@ -180,7 +180,9 @@
                         <span><?= nl2br(esc($config['payment_message'])) ?></span>
                         <span><?= lang('Sales.comments') . ': ' . (empty($comments) ? esc($config['invoice_default_comments']) : esc($comments)) ?></span>
                     </h5>
-                    <?= nl2br(esc($config['return_policy'])) ?>
+                    <?php if (!empty(trim((string) ($config['return_policy'] ?? '')))): ?>
+                        <?= nl2br(esc($config['return_policy'])) ?>
+                    <?php endif; ?>
                 </div>
                 <div id="barcode">
                     <img alt="<?= esc($sale_id) ?>" src="data:image/svg+xml;base64,<?= base64_encode($barcode) ?>"><br>

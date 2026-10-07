@@ -122,9 +122,11 @@ echo view('partial/print_receipt', ['print_after_sale', $print_after_sale, 'sele
         <?php } ?>
     </table>
 
-    <div id="sale_return_policy">
-        <?= nl2br(esc($config['return_policy'])) ?>
-    </div>
+    <?php if (!empty(trim((string) ($config['return_policy'] ?? '')))): ?>
+        <div id="sale_return_policy">
+            <?= nl2br(esc($config['return_policy'])) ?>
+        </div>
+    <?php endif; ?>
 
     <div id="barcode">
         <?= $barcode ?><br>
