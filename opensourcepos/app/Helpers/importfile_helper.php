@@ -16,6 +16,42 @@ function generate_import_items_csv(array $stock_locations, array $attributes): s
 }
 
 /**
+ * Builds a full import-compatible CSV (BOM + header + data rows).
+ * Each data row is an associative array keyed by the template header labels
+ * (e.g. "Item Name", "location_stock", "attribute_Expiry Date").
+ *
+ * @param array $stock_locations
+ * @param array $attributes
+ * @param array $data_rows
+ * @return string
+ */
+function generate_import_items_csv_with_data(array $stock_locations, array $attributes, array $data_rows = []): string
+{
+    $csv = generate_import_items_csv($stock_locations, $attributes);
+
+    if ($data_rows === []) {
+        return $csv;
+    }
+
+    $headers = str_getcsv(substr($csv, 3));
+    $handle = fopen('php://temp', 'r+');
+
+    foreach ($data_rows as $row) {
+        $ordered = [];
+        foreach ($headers as $header) {
+            $ordered[] = $row[$header] ?? '';
+        }
+        fputcsv($handle, $ordered);
+    }
+
+    rewind($handle);
+    $body = stream_get_contents($handle);
+    fclose($handle);
+
+    return rtrim($csv, "\r\n") . "\n" . rtrim((string)$body, "\r\n") . "\n";
+}
+
+/**
  * @param array $locations
  * @return string
  */
@@ -53,28 +89,48 @@ function generate_attribute_headers(array $attribute_names): string
  */
 function get_csv_file(string $file_name): array
 {
-    $csv_rows = false;
+    $csv_rows = [];
 
-    if (($csv_file = fopen($file_name, 'r')) !== false) {
-        helper('security');
-
-        $csv_rows = [];
-
-        // Skip Byte-Order Mark
-        if (bom_exists($csv_file)) {
-            fseek($csv_file, 3);
-        }
-
-        $headers = fgetcsv($csv_file);
-
-        while (($row = fgetcsv($csv_file)) !== false) {
-            if ($row !== [null]) {
-                $csv_rows[] = array_combine($headers, $row);
-            }
-        }
-
-        fclose($csv_file);
+    if (($csv_file = fopen($file_name, 'r')) === false) {
+        return $csv_rows;
     }
+
+    helper('security');
+
+    // Skip Byte-Order Mark
+    if (bom_exists($csv_file)) {
+        fseek($csv_file, 3);
+    }
+
+    $headers = fgetcsv($csv_file);
+    if ($headers === false || $headers === [null]) {
+        fclose($csv_file);
+
+        return $csv_rows;
+    }
+
+    // Normalize header labels so export/import column names stay aligned
+    $headers = array_map(static function ($header) {
+        return trim((string)$header);
+    }, $headers);
+
+    while (($row = fgetcsv($csv_file)) !== false) {
+        if ($row === [null]) {
+            continue;
+        }
+
+        // Skip malformed rows whose column count does not match the template header
+        if (count($row) !== count($headers)) {
+            continue;
+        }
+
+        $combined = array_combine($headers, $row);
+        if ($combined !== false) {
+            $csv_rows[] = $combined;
+        }
+    }
+
+    fclose($csv_file);
 
     return $csv_rows;
 }

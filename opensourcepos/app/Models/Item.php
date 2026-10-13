@@ -492,15 +492,17 @@ class Item extends Model
     public function save_value(array &$item_data, int $item_id = NEW_ENTRY): bool    // TODO: need to bring this in line with parent or change the name
     {
         $builder = $this->db->table('items');
+          $insertedItemId = $item_id > 0 ? $item_id : null;
 
         if ($item_id < 1 || !$this->exists($item_id, true)) {
             if ($builder->insert($item_data)) {
-                $item_data['item_id'] = (int)$this->db->insertID();
-                if ($item_id < 1) {
-                    $builder = $this->db->table('items');
-                    $builder->where('item_id', $item_data['item_id']);
-                    $builder->update(['low_sell_item_id' => $item_data['item_id']]);
-                }
+                  $item_data['item_id'] = (int) ($this->db->insertID() ?: ($insertedItemId ?? 0));
+                  if (!isset($item_data['low_sell_item_id']) || (int) $item_data['low_sell_item_id'] === 0) {
+                      $builder = $this->db->table('items');
+                      $builder->where('item_id', $item_data['item_id']);
+                      $builder->update(['low_sell_item_id' => $item_data['item_id']]);
+                      $item_data['low_sell_item_id'] = $item_data['item_id'];
+                  }
 
                 return true;
             }

@@ -1015,6 +1015,30 @@ class ItemsControllerTest extends CIUnitTestCase
         $this->assertFalse($notExists);
     }
 
+    public function testCsvImportAllowsExplicitNewItemId(): void
+    {
+        $itemId = 1000001;
+        $itemData = [
+            'item_id' => $itemId,
+            'name' => 'Explicit ID Item',
+            'category' => 'Test',
+            'cost_price' => 10.00,
+            'unit_price' => 20.00,
+            'reorder_level' => 0,
+            'item_number' => 'EXPLICIT-' . $itemId,
+            'allow_alt_description' => '0',
+            'is_serialized' => '0',
+            'deleted' => 0,
+        ];
+
+        $this->assertTrue($this->item->save_value($itemData, $itemId));
+
+        $savedItem = $this->item->get_info($itemId);
+        $this->assertEquals($itemId, (int) $savedItem->item_id);
+        $this->assertEquals('Explicit ID Item', $savedItem->name);
+        $this->assertEquals($itemId, (int) $savedItem->low_sell_item_id);
+    }
+
     public function testFullCsvImportFlowSimulated(): void
     {
         $csvRow = [

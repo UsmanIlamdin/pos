@@ -1054,20 +1054,145 @@ class Items extends Secure_Controller
     }
 
     /**
-     * Generates a template CSV file for item import/update containing headers for current stock locations and attributes. Used in app/Views/items/form_csv_import.php
+     * Generates a CSV file for item import/update.
+     * - ?template=1 (or used from the import modal) downloads headers only
+     * - otherwise exports item rows in the same column layout (selected ids via ?ids[], or all items)
      *
      * @return DownloadResponse
      * @noinspection PhpUnused
      */
     public function getGenerateCsvFile(): DownloadResponse
     {
-        helper('importfile');
-        $name = 'import_items.csv';
-        $allowed_locations = $this->stock_location->get_allowed_locations();
-        $allowedAttributes = $this->attribute->getDefinitionNames();
-        $data = generate_import_items_csv($allowed_locations, $allowedAttributes);
+        helper(['importfile', 'locale']);
 
-        return $this->response->download($name, $data);
+        $name = 'import_items.csv';
+        $allowedLocations = $this->stock_location->get_allowed_locations();
+        $allowedAttributes = $this->attribute->getDefinitionNames();
+        $templateOnly = (string)$this->request->getGet('template') === '1';
+
+        if ($templateOnly) {
+            return $this->response->download($name, generate_import_items_csv($allowedLocations, $allowedAttributes));
+        }
+
+        $itemIds = $this->resolveCsvExportItemIds();
+        $dataRows = [];
+
+        foreach ($itemIds as $itemId) {
+            $row = $this->buildCsvExportRow($itemId, $allowedLocations, $allowedAttributes);
+            if ($row !== null) {
+                $dataRows[] = $row;
+            }
+        }
+
+        $csv = generate_import_items_csv_with_data($allowedLocations, $allowedAttributes, $dataRows);
+
+        return $this->response->download($name, $csv);
+    }
+
+    /**
+     * Resolves which item ids to include in a CSV export.
+     * Prefer selected ids from the query string; otherwise export all non-deleted items.
+     *
+     * @return list<int>
+     */
+    private function resolveCsvExportItemIds(): array
+    {
+        $idsParam = $this->request->getGet('ids');
+        $itemIds = [];
+
+        if (is_array($idsParam)) {
+            $itemIds = $idsParam;
+        } elseif (is_string($idsParam) && $idsParam !== '') {
+            $itemIds = preg_split('/[:|,]/', $idsParam) ?: [];
+        }
+
+        $itemIds = array_values(array_unique(array_filter(array_map('intval', $itemIds), static fn(int $id) => $id > 0)));
+
+        if ($itemIds !== []) {
+            return $itemIds;
+        }
+
+        $allItems = $this->item->get_all()->getResult();
+        $itemIds = [];
+        foreach ($allItems as $item) {
+            $itemIds[] = (int)$item->item_id;
+        }
+
+        return $itemIds;
+    }
+
+    /**
+     * Builds one import-compatible CSV row for an item.
+     *
+     * @param int   $itemId
+     * @param array $allowedLocations location_id => location_name
+     * @param array $allowedAttributes definition list from Attribute::getDefinitionNames()
+     * @return array<string, string|int|float>|null
+     */
+    private function buildCsvExportRow(int $itemId, array $allowedLocations, array $allowedAttributes): ?array
+    {
+        if ($itemId < 1 || !$this->item->exists($itemId, true)) {
+            return null;
+        }
+
+        $item = $this->item->get_info($itemId);
+        if (empty($item->item_id)) {
+            return null;
+        }
+
+        $taxes = $this->item_taxes->get_info($itemId);
+        $tax1 = $taxes[0] ?? ['name' => '', 'percent' => ''];
+        $tax2 = $taxes[1] ?? ['name' => '', 'percent' => ''];
+
+        $row = [
+            'Id'                        => (int)$item->item_id,
+            'Barcode'                   => (string)($item->item_number ?? ''),
+            'Item Name'                 => (string)($item->name ?? ''),
+            'Category'                  => (string)($item->category ?? ''),
+            'Supplier ID'               => $item->supplier_id !== null && $item->supplier_id !== '' ? (string)$item->supplier_id : '',
+            'Cost Price'                => (string)$item->cost_price,
+            'Unit Price'                => (string)$item->unit_price,
+            'Tax 1 Name'                => (string)($tax1['name'] ?? ''),
+            'Tax 1 Percent'             => isset($tax1['percent']) && $tax1['percent'] !== '' ? (string)$tax1['percent'] : '',
+            'Tax 2 Name'                => (string)($tax2['name'] ?? ''),
+            'Tax 2 Percent'             => isset($tax2['percent']) && $tax2['percent'] !== '' ? (string)$tax2['percent'] : '',
+            'Reorder Level'             => (string)$item->reorder_level,
+            'Description'               => (string)($item->description ?? ''),
+            'Allow Alt Description'     => !empty($item->allow_alt_description) ? '1' : '0',
+            'Item has Serial Number'    => !empty($item->is_serialized) ? '1' : '0',
+            'Image'                     => (string)($item->pic_filename ?? ''),
+            'HSN'                       => (string)($item->hsn_code ?? ''),
+        ];
+
+        foreach ($allowedLocations as $locationId => $locationName) {
+            $quantity = $this->item_quantity->get_item_quantity($itemId, (int)$locationId);
+            $row['location_' . $locationName] = (string)($quantity->quantity ?? 0);
+        }
+
+        $attributeNames = $allowedAttributes;
+        unset($attributeNames[NEW_ENTRY]);
+
+        foreach ($attributeNames as $definitionId => $definitionName) {
+            $definition = $this->attribute->getDefinitionByName((string)$definitionName);
+            $value = '';
+
+            if (!empty($definition['definition_id'])) {
+                $attributeValue = $this->attribute->getAttributeValue($itemId, (int)$definition['definition_id']);
+                $definitionType = $definition['definition_type'] ?? TEXT;
+
+                if ($definitionType === DATE && !empty($attributeValue->attribute_date) && $attributeValue->attribute_date !== '0000-00-00') {
+                    $value = date($this->config['dateformat'], strtotime((string)$attributeValue->attribute_date));
+                } elseif ($definitionType === DECIMAL && ($attributeValue->attribute_decimal !== null && $attributeValue->attribute_decimal !== '')) {
+                    $value = (string)$attributeValue->attribute_decimal;
+                } elseif (!empty($attributeValue->attribute_value) || (isset($attributeValue->attribute_value) && $attributeValue->attribute_value === '0')) {
+                    $value = (string)$attributeValue->attribute_value;
+                }
+            }
+
+            $row['attribute_' . $definitionName] = $value;
+        }
+
+        return $row;
     }
 
     /**
@@ -1099,8 +1224,16 @@ class Items extends Secure_Controller
                     $allowedStockLocations = $this->stock_location->get_allowed_locations();
                     $attributeDefinitionNames    = $this->attribute->getDefinitionNames();
 
-                    if (!csvImportHasRequiredItemHeaders($csvRows, $allowedStockLocations, $attributeDefinitionNames)) {
+                    if (!is_array($csvRows) || !csvImportHasRequiredItemHeaders($csvRows, $allowedStockLocations, $attributeDefinitionNames)) {
                         return $this->response->setJSON(['success' => false, 'message' => lang('Items.csv_import_nodata_wrongformat')]);
+                    }
+
+                    $invalidLocations = $this->validateCSVStockLocations(reset($csvRows), $allowedStockLocations);
+                    if (!empty($invalidLocations)) {
+                        return $this->response->setJSON([
+                            'success' => false,
+                            'message' => lang('Items.csv_import_invalid_location', [implode(', ', $invalidLocations)]),
+                        ]);
                     }
 
                     $employeeId = $this->employee->get_logged_in_employee_info()->person_id;
@@ -1123,49 +1256,42 @@ class Items extends Secure_Controller
                     foreach ($csvRows as $key => $row) {
                         $isFailedRow = false;
                         $itemId = (int)$row['Id'];
-                        $isUpdate = ($itemId > 0);
+                          $isUpdate = $itemId > 0 && $this->item->exists($itemId);
                         $itemData = [
-                            'item_id'       => $itemId,
                             'name'          => $row['Item Name'],
                             'description'   => filter_var($row['Description'], FILTER_SANITIZE_FULL_SPECIAL_CHARS),
                             'category'      => $row['Category'],
                             'cost_price'    => $row['Cost Price'],
                             'unit_price'    => $row['Unit Price'],
                             'reorder_level' => $row['Reorder Level'],
-                            'deleted'       => false,
+                            'deleted'       => 0,
                             'hsn_code'      => $row['HSN'],
-                            'pic_filename'  => $row['Image']
+                            'pic_filename'  => $row['Image'],
                         ];
+
+                          if ($itemId > 0) {
+                            $itemData['item_id'] = $itemId;
+                        }
 
                         if (!empty($row['Supplier ID'])) {
                             $itemData['supplier_id'] = $this->supplier->exists($row['Supplier ID']) ? $row['Supplier ID'] : null;
                         }
 
-                        if ($isUpdate) {
-                            $itemData['allow_alt_description'] = $row['Allow Alt Description'] === '' ? null : $row['Allow Alt Description'];
-                            $itemData['is_serialized'] = $row['Item has Serial Number'] === '' ? null : $row['Item has Serial Number'];
-                        } else {
-                            $itemData['allow_alt_description'] = $row['Allow Alt Description'] === '' ? '0' : '1';
-                            $itemData['is_serialized'] = $row['Item has Serial Number'] === '' ? '0' : '1';
-                        }
+                        $itemData['allow_alt_description'] = $this->parseCsvFlag((string)($row['Allow Alt Description'] ?? ''), $isUpdate);
+                        $itemData['is_serialized'] = $this->parseCsvFlag((string)($row['Item has Serial Number'] ?? ''), $isUpdate);
 
                         if (!empty($row['Barcode'])) {
                             $itemData['item_number'] = $row['Barcode'];
-                            $isFailedRow = $this->item->item_number_exists($itemData['item_number'], $itemId);
+                            $isFailedRow = $this->item->item_number_exists($itemData['item_number'], (string)$itemId);
                         }
 
                         if (!$isFailedRow) {
-                            $allowedStockLocations = $this->stock_location->get_allowed_locations();
                             $isFailedRow = $this->validateCSVData($row, $itemData, $allowedStockLocations, $attributeDefinitionNames, $attributeData);
-                            if (!empty($invalidLocations)) {
-                                $isFailedRow = true;
-                                log_message('error', 'CSV import: Invalid stock location(s) found: ' . implode(', ', $invalidLocations));
-                            }
                         }
 
-                        // Remove false, null, '' and empty strings but keep 0
-                        $itemData = array_filter($itemData, function ($value) {
-                            return $value !== null && strlen($value);
+                        // Drop null/empty so update rows can omit unchanged fields; keep 0 and '0'
+                        $itemData = array_filter($itemData, static function ($value) {
+                            return $value !== null && $value !== '';
                         });
 
                         if (!$isFailedRow && $this->item->save_value($itemData, $itemId)) {
@@ -1187,7 +1313,7 @@ class Items extends Secure_Controller
                             }
 
                             if ($isUpdate) {
-                                $itemData = array_merge($itemData, get_object_vars($this->item->get_info_by_id_or_number($itemId)));
+                                $itemData = array_merge($itemData, get_object_vars($this->item->get_info_by_id_or_number((string)$itemId)));
                             }
                         } else {
                             $failedRow = $key + 2;
@@ -1214,10 +1340,38 @@ class Items extends Secure_Controller
                     return $this->response->setJSON(['success' => false, 'message' => lang('Items.csv_import_nodata_wrongformat')]);
                 }
             }
-        } catch (Exception $e) {
-            return $this->response->setJSON(['success' => false, 'message' => $e->getMessage()]);
+        } catch (Throwable $e) {
+            log_message('error', 'CSV Item import exception: ' . $e->getMessage());
+
+            return $this->response->setJSON(['success' => false, 'message' => lang('Items.csv_import_failed')]);
         }
 
+    }
+
+    /**
+     * Normalizes CSV flag columns (Allow Alt Description / Item has Serial Number).
+     * Empty cells mean "default/unchanged"; 0/1 (and common yes/no tokens) are preserved.
+     */
+    private function parseCsvFlag(string $value, bool $isUpdate): string|null
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return $isUpdate ? null : '0';
+        }
+
+        $normalized = strtolower($value);
+
+        if (in_array($normalized, ['0', 'false', 'no', 'n'], true)) {
+            return '0';
+        }
+
+        if (in_array($normalized, ['1', 'true', 'yes', 'y'], true)) {
+            return '1';
+        }
+
+        // Any other non-empty token is treated as enabled (legacy template behaviour)
+        return '1';
     }
 
     private function extractAttributeData(array $row): array
@@ -1271,7 +1425,7 @@ class Items extends Secure_Controller
     private function validateCSVData(array $row, array $itemData, array $allowedStockLocations, array $definitionNames, array $attributeData): bool    // TODO: Long function and large number of parameters in the declaration... perhaps refactoring is needed
     {
         $itemId = $row['Id'];
-        $isUpdate = (bool)$itemId;
+          $isUpdate = (int)$itemId > 0 && $this->item->exists($itemId);
 
         // Check for empty required fields
         $valuesToCheckForEmpty = [
@@ -1287,13 +1441,8 @@ class Items extends Secure_Controller
             }
         }
 
-        if (!$isUpdate) {
+          if (!$isUpdate) {
             $itemData['cost_price'] = empty($itemData['cost_price']) ? 0 : $itemData['cost_price'];    // Allow for zero wholesale price
-        } else {
-            if (!$this->item->exists($itemId)) {
-                log_message('error', "non-existent item_id: '$itemId' when either existing item_id or no item_id is required.");
-                return true;
-            }
         }
 
         // Build array of fields to check for numerics
