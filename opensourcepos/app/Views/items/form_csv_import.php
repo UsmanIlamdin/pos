@@ -1,33 +1,23 @@
-<style>
-    #csv_form .form-group {
-        margin-left: 0;
-        margin-right: 0;
-    }
-
-    #csv_form + #error_message_box,
-    #error_message_box {
-        margin-left: 0;
-        padding-left: 0;
-        list-style-position: inside;
-    }
-</style>
-
 <ul id="error_message_box" class="error_message_box"></ul>
 
-<?= form_open_multipart('items/importCsvFile/', ['id' => 'csv_form']) ?>
+<?= form_open_multipart('items/importCsvFile/', ['id' => 'csv_form', 'class' => 'form-horizontal']) ?>
     <fieldset id="item_basic_info">
 
         <div class="form-group form-group-sm">
-            <a href="<?= esc(site_url('items/generateCsvFile?template=1'), 'attr') ?>"><?= lang('Common.download_import_template') ?></a>
+            <div class="col-xs-12">
+                <a href="<?= esc('items/generateCsvFile', 'attr') ?>"><?= lang('Common.download_import_template') ?></a>
+            </div>
         </div>
 
         <div class="form-group form-group-sm">
-            <div class="fileinput fileinput-new input-group" data-provides="fileinput">
-                <div class="form-control" data-trigger="fileinput"><i class="glyphicon glyphicon-file fileinput-exists"></i><span class="fileinput-filename"></span></div>
-                <span class="input-group-addon input-sm btn btn-default btn-file">
-                    <span class="fileinput-new"><?= lang('Common.import_select_file') ?></span><span class="fileinput-exists"><?= lang('Common.import_change_file') ?></span><input type="file" id="file_path" name="file_path" accept=".csv">
-                </span>
-                <a href="#" class="input-group-addon input-sm btn btn-default fileinput-exists" data-dismiss="fileinput"><?= lang('Common.import_remove_file') ?></a>
+            <div class="col-xs-12">
+                <div class="fileinput fileinput-new input-group" data-provides="fileinput">
+                    <div class="form-control" data-trigger="fileinput"><i class="glyphicon glyphicon-file fileinput-exists"></i><span class="fileinput-filename"></span></div>
+                    <span class="input-group-addon input-sm btn btn-default btn-file">
+                        <span class="fileinput-new"><?= lang('Common.import_select_file') ?></span><span class="fileinput-exists"><?= lang('Common.import_change_file') ?></span><input type="file" id="file_path" name="file_path" accept=".csv">
+                    </span>
+                    <a href="#" class="input-group-addon input-sm btn btn-default fileinput-exists" data-dismiss="fileinput"><?= lang('Common.import_remove_file') ?></a>
+                </div>
             </div>
         </div>
 
@@ -41,32 +31,21 @@
             submitHandler: function(form) {
                 $(form).ajaxSubmit({
                     success: function(response) {
-                        if (!response || !response.success) {
-                            const message = (response && response.message)
-                                ? response.message
-                                : "<?= esc(lang('Items.csv_import_failed'), 'js') ?>";
-                            $('#error_message_box').html($('<li></li>').text(message)).show();
-                            return;
-                        }
-
                         dialog_support.hide();
                         table_support.handle_submit('<?= esc('items') ?>', response);
-                    },
-                    error: function() {
-                        $('#error_message_box').html(
-                            $('<li></li>').text("<?= esc(lang('Items.csv_import_failed'), 'js') ?>")
-                        ).show();
                     },
                     dataType: 'json'
                 });
             },
+
+            errorLabelContainer: '#error_message_box',
 
             rules: {
                 file_path: 'required'
             },
 
             messages: {
-                file_path: "<?= esc(lang('Common.import_full_path'), 'js') ?>"
+                file_path: "<?= lang('Common.import_full_path') ?>"
             }
         }, form_support.error));
     });

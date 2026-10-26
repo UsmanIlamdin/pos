@@ -76,31 +76,37 @@ class Accounts extends Secure_Controller
         }
 
         $employeeId = (int) $this->employee->get_logged_in_employee_info()->person_id;
-        $filters = $this->accountViewFilters();
-        $perPage = Customer_account_lib::DEFAULT_PAGE_SIZE;
-
-        // Shell page: only load form/summary data. Table sections lazy-load via JSON endpoints.
-        $outstandingSalesAll = $this->accountLib->getOutstandingSales($customerId, false);
+        $ledgerPage = $this->accountLib->getLedgerPage($customerId, 1, Customer_account_lib::DEFAULT_PAGE_SIZE);
+        $activityPage = $this->accountLib->getAccountActivity($customerId, 1, Customer_account_lib::DEFAULT_PAGE_SIZE);
+        $invoicePage = $this->invoiceLib->listForCustomerPaginated($customerId, 1, Customer_account_lib::DEFAULT_PAGE_SIZE);
+        $outstandingSales = $this->accountLib->getOutstandingSales($customerId, false);
         $payableSales = array_values(array_filter(
-            $outstandingSalesAll,
+            $outstandingSales,
             static fn (array $sale): bool => empty($sale['on_consolidated_invoice'])
         ));
-        $allInvoices = $this->invoiceLib->listForCustomer($customerId);
-        $openInvoices = array_values(array_filter(
-            $allInvoices,
-            static fn (array $invoice): bool => !in_array((int) $invoice['status'], [CI_STATUS_CANCELLED, CI_STATUS_PAID], true)
-        ));
+        $openInvoices = $this->invoiceLib->listOpenForCustomer($customerId);
 
         $data = [
             'person_info'             => $person,
             'customer_id'             => $customerId,
-            'outstanding_balance'     => $this->accountLib->getCustomerOutstanding($customerId),
-            'customer_credit'         => $this->accountLib->getCustomerCreditBalance($customerId),
-            'outstanding_sales_all'   => $outstandingSalesAll,
+            'outstanding_balance'     => $ledgerPage['summary']['outstanding_receivables'] ?? $this->accountLib->getCustomerOutstanding($customerId),
+            'customer_credit'         => $ledgerPage['summary']['customer_credit'] ?? $this->accountLib->getCustomerCreditBalance($customerId),
+            'outstanding_sales'       => $outstandingSales,
+            'outstanding_sales_all'   => $outstandingSales,
             'payable_sales'           => $payableSales,
             'eligible_sales'          => $this->accountLib->getOutstandingSales($customerId, true),
+            'consolidated_invoices'   => $invoicePage['rows'],
             'open_invoices'           => $openInvoices,
-            'open_invoice_count'      => $this->invoiceLib->countOpenForCustomer($customerId),
+            'invoices_page'           => $invoicePage,
+            'open_invoice_count'      => count($openInvoices),
+            'open_invoice_balance'    => $this->invoiceLib->getOpenBalanceTotalForCustomer($customerId),
+            'ledger'                  => $ledgerPage['rows'],
+            'ledger_page'             => $ledgerPage,
+            'account_level'           => $ledgerPage['account_level'] ?? [],
+            'transactions'            => ($txPage = $this->accountLib->getFinancialTransactions($customerId, 1, Customer_account_lib::DEFAULT_PAGE_SIZE))['rows'],
+            'transactions_page'       => $txPage,
+            'activity'                => $activityPage['rows'],
+            'activity_page'           => $activityPage,
             'payment_options'         => $this->accountLib->getAccountPaymentOptions(),
             'reference_types'         => get_reference_code_payment_types(),
             'can_pay'                 => $this->employee->has_grant('accounts_payments', $employeeId),
@@ -111,8 +117,7 @@ class Accounts extends Secure_Controller
             'can_consolidate'         => $this->employee->has_grant('accounts_consolidated', $employeeId),
             'can_cancel'              => $this->employee->has_grant('accounts_cancel', $employeeId),
             'status_labels'           => $this->statusLabels(),
-            'per_page'                => $perPage,
-            'account_filters'         => $filters,
+            'per_page'                => Customer_account_lib::DEFAULT_PAGE_SIZE,
         ];
 
         return view('accounts/view', $data);
@@ -147,6 +152,10 @@ class Accounts extends Secure_Controller
             ];
         }
 
+        $unfilteredCount = !empty($filters['active'])
+            ? count($this->accountLib->getOutstandingSales($customerId, false))
+            : $total;
+
         return $this->response->setJSON([
             'rows'        => $rows,
             'total'       => $total,
@@ -154,32 +163,31 @@ class Accounts extends Secure_Controller
             'per_page'    => $perPage,
             'total_pages' => $totalPages,
             'filtered'    => !empty($filters['active']),
+            'summary'     => [
+                'outstanding_sales_count' => $unfilteredCount,
+            ],
         ]);
     }
 
     public function getLedger(int $customerId): ResponseInterface
     {
-        $filters = $this->accountViewFilters()['ledger'];
-        $page = $this->resolveSectionPage($filters['page'], 'ledger_page');
+        $page = max(1, (int) $this->request->getGet('page'));
         $perPage = max(1, (int) ($this->request->getGet('per_page') ?: Customer_account_lib::DEFAULT_PAGE_SIZE));
-        $result = $this->accountLib->getLedgerPage($customerId, $page, $perPage, $filters);
-        $employeeId = (int) $this->employee->get_logged_in_employee_info()->person_id;
-        $canVoid = $this->employee->has_grant('accounts_void', $employeeId);
-        $canReallocate = $this->employee->has_grant('accounts_reallocate', $employeeId);
+        $result = $this->accountLib->getLedgerPage($customerId, $page, $perPage);
 
         $rows = [];
         foreach ($result['rows'] as $row) {
             $children = [];
             foreach ($row['children'] ?? [] as $child) {
                 $children[] = [
-                    'source'           => $child['source'],
-                    'date'             => esc(to_datetime(strtotime((string) ($child['date'] ?? '')))),
-                    'reference'        => esc((string) ($child['reference'] ?? '')),
-                    'amount'           => to_currency($child['amount'] ?? $child['credit'] ?? 0),
-                    'payment_id'       => $child['payment_id'] ?? null,
+                    'source'         => $child['source'],
+                    'date'           => esc(to_datetime(strtotime((string) ($child['date'] ?? '')))),
+                    'reference'      => esc((string) ($child['reference'] ?? '')),
+                    'amount'         => to_currency($child['amount'] ?? $child['credit'] ?? 0),
+                    'payment_id'     => $child['payment_id'] ?? null,
                     'return_credit_id' => $child['return_credit_id'] ?? null,
-                    'can_void'         => $canVoid && !empty($child['can_void']) && ($child['source'] ?? '') === 'account',
-                    'can_reallocate'   => $canReallocate && !empty($child['can_reallocate']) && ($child['source'] ?? '') === 'account',
+                    'can_void'       => !empty($child['can_void']),
+                    'can_reallocate' => !empty($child['can_reallocate']),
                 ];
             }
             $rows[] = [
@@ -196,9 +204,8 @@ class Accounts extends Secure_Controller
         }
 
         return $this->response->setJSON(array_merge($result, [
-            'rows'     => $rows,
-            'filtered' => !empty($filters['active']),
-            'summary'  => [
+            'rows'    => $rows,
+            'summary' => [
                 'outstanding_receivables' => to_currency($result['summary']['outstanding_receivables'] ?? 0),
                 'customer_credit'         => to_currency($result['summary']['customer_credit'] ?? 0),
                 'outstanding_sales_count' => (int) ($result['summary']['outstanding_sales_count'] ?? 0),
@@ -209,10 +216,9 @@ class Accounts extends Secure_Controller
 
     public function getTransactions(int $customerId): ResponseInterface
     {
-        $filters = $this->accountViewFilters()['transaction'];
-        $page = $this->resolveSectionPage($filters['page'], 'transaction_page');
+        $page = max(1, (int) $this->request->getGet('page'));
         $perPage = max(1, (int) ($this->request->getGet('per_page') ?: Customer_account_lib::DEFAULT_PAGE_SIZE));
-        $result = $this->accountLib->getFinancialTransactions($customerId, $page, $perPage, $filters);
+        $result = $this->accountLib->getFinancialTransactions($customerId, $page, $perPage);
 
         $rows = [];
         foreach ($result['rows'] as $row) {
@@ -227,18 +233,14 @@ class Accounts extends Secure_Controller
             ];
         }
 
-        return $this->response->setJSON(array_merge($result, [
-            'rows'     => $rows,
-            'filtered' => !empty($filters['active']),
-        ]));
+        return $this->response->setJSON(array_merge($result, ['rows' => $rows]));
     }
 
     public function getActivity(int $customerId): ResponseInterface
     {
-        $filters = $this->accountViewFilters()['activity'];
-        $page = $this->resolveSectionPage($filters['page'], 'activity_page');
+        $page = max(1, (int) $this->request->getGet('page'));
         $perPage = max(1, (int) ($this->request->getGet('per_page') ?: Customer_account_lib::DEFAULT_PAGE_SIZE));
-        $result = $this->accountLib->getAccountActivity($customerId, $page, $perPage, $filters);
+        $result = $this->accountLib->getAccountActivity($customerId, $page, $perPage);
 
         $rows = [];
         foreach ($result['rows'] as $row) {
@@ -249,18 +251,14 @@ class Accounts extends Secure_Controller
             ];
         }
 
-        return $this->response->setJSON(array_merge($result, [
-            'rows'     => $rows,
-            'filtered' => !empty($filters['active']),
-        ]));
+        return $this->response->setJSON(array_merge($result, ['rows' => $rows]));
     }
 
     public function getInvoices(int $customerId): ResponseInterface
     {
-        $filters = $this->accountViewFilters()['ci'];
-        $page = $this->resolveSectionPage($filters['page'], 'ci_page');
+        $page = max(1, (int) $this->request->getGet('page'));
         $perPage = max(1, (int) ($this->request->getGet('per_page') ?: Customer_account_lib::DEFAULT_PAGE_SIZE));
-        $result = $this->invoiceLib->listForCustomerPaginated($customerId, $page, $perPage, $filters);
+        $result = $this->invoiceLib->listForCustomerPaginated($customerId, $page, $perPage);
         $statusLabels = $this->statusLabels();
 
         $rows = [];
@@ -273,14 +271,11 @@ class Accounts extends Secure_Controller
                 'total'          => to_currency($invoice['total_amount']),
                 'paid'           => to_currency($invoice['paid']),
                 'balance'        => to_currency($invoice['balance']),
-                'actions'        => anchor('accounts/invoice/' . $id, lang('Accounts.view_account')),
+                'actions'        => anchor('accounts/invoice/' . $id, lang('Accounts.view_invoice')),
             ];
         }
 
-        return $this->response->setJSON(array_merge($result, [
-            'rows'     => $rows,
-            'filtered' => !empty($filters['active']),
-        ]));
+        return $this->response->setJSON(array_merge($result, ['rows' => $rows]));
     }
 
     public function postPayment(int $customerId): ResponseInterface
@@ -407,6 +402,7 @@ class Accounts extends Secure_Controller
             'reference_types' => get_reference_code_payment_types(),
             'can_pay'         => $this->employee->has_grant('accounts_payments', $employeeId),
             'can_cancel'      => $this->employee->has_grant('accounts_cancel', $employeeId),
+            'can_void'        => $this->employee->has_grant('accounts_void', $employeeId),
             'status_labels'   => $this->statusLabels(),
         ];
 
@@ -450,6 +446,41 @@ class Accounts extends Secure_Controller
 
     public function postCancelInvoice(int $invoiceId): ResponseInterface
     {
+        return $this->postVoidInvoice($invoiceId);
+    }
+
+    public function getInvoiceDetails(int $invoiceId): ResponseInterface
+    {
+        $employeeId = (int) $this->employee->get_logged_in_employee_info()->person_id;
+        if (!$this->employee->has_grant('accounts_cancel', $employeeId)
+            && !$this->employee->has_grant('accounts', $employeeId)
+        ) {
+            return $this->response->setStatusCode(403)->setJSON([
+                'success' => false,
+                'message' => lang('Error.no_permission_module'),
+            ]);
+        }
+
+        try {
+            $customerId = $this->request->getGet('customer_id');
+            $details = $this->invoiceLib->getInvoiceVoidDetails($invoiceId);
+            if ($customerId !== null && $customerId !== ''
+                && (int) $details['customer_id'] !== (int) $customerId
+            ) {
+                return $this->response->setJSON([
+                    'success' => false,
+                    'message' => lang('Accounts.error_different_customer'),
+                ]);
+            }
+
+            return $this->response->setJSON(['success' => true, 'invoice' => $details]);
+        } catch (RuntimeException $e) {
+            return $this->response->setJSON(['success' => false, 'message' => $e->getMessage()]);
+        }
+    }
+
+    public function postVoidInvoice(int $invoiceId): ResponseInterface
+    {
         $employeeId = (int) $this->employee->get_logged_in_employee_info()->person_id;
         if (!$this->employee->has_grant('accounts_cancel', $employeeId)) {
             return $this->response->setStatusCode(403)->setJSON([
@@ -459,12 +490,75 @@ class Accounts extends Secure_Controller
         }
 
         try {
-            $this->invoiceLib->cancel($invoiceId);
+            $reason = trim((string) ($this->request->getPost('void_reason') ?? ''));
+            if ($reason === '') {
+                return $this->response->setJSON([
+                    'success' => false,
+                    'message' => lang('Accounts.error_void_reason_required'),
+                ]);
+            }
+
+            $customerId = $this->request->getPost('customer_id');
+            $result = $this->invoiceLib->voidInvoice(
+                $invoiceId,
+                $employeeId,
+                $reason,
+                $customerId !== null && $customerId !== '' ? (int) $customerId : null
+            );
+
+            $message = lang('Accounts.invoice_voided');
+            if ($result['active_payment_total'] > 0.00001) {
+                $message .= ' ' . lang('Accounts.invoice_voided_payments_remain', [
+                    to_currency($result['active_payment_total']),
+                    to_currency($result['customer_outstanding_after']),
+                ]);
+            } elseif ($result['customer_outstanding_after'] > 0.00001) {
+                $message .= ' ' . lang('Accounts.invoice_voided_receivables_restored', [
+                    to_currency($result['customer_outstanding_after']),
+                ]);
+            }
 
             return $this->response->setJSON([
                 'success' => true,
-                'message' => lang('Accounts.status_cancelled'),
+                'message' => $message,
+                'result'  => [
+                    'customer_outstanding_before' => to_currency($result['customer_outstanding_before']),
+                    'customer_outstanding_after'  => to_currency($result['customer_outstanding_after']),
+                    'active_payment_total'        => to_currency($result['active_payment_total']),
+                    'payments_preserved'          => true,
+                ],
             ]);
+        } catch (RuntimeException $e) {
+            return $this->response->setJSON(['success' => false, 'message' => $e->getMessage()]);
+        }
+    }
+
+    public function getPaymentDetails(int $paymentId): ResponseInterface
+    {
+        $employeeId = (int) $this->employee->get_logged_in_employee_info()->person_id;
+        if (!$this->employee->has_grant('accounts_void', $employeeId)
+            && !$this->employee->has_grant('accounts_reallocate', $employeeId)
+            && !$this->employee->has_grant('accounts', $employeeId)
+        ) {
+            return $this->response->setStatusCode(403)->setJSON([
+                'success' => false,
+                'message' => lang('Error.no_permission_module'),
+            ]);
+        }
+
+        try {
+            $customerId = $this->request->getGet('customer_id');
+            $details = $this->accountLib->getPaymentVoidDetails($paymentId);
+            if ($customerId !== null && $customerId !== ''
+                && (int) $details['customer_id'] !== (int) $customerId
+            ) {
+                return $this->response->setJSON([
+                    'success' => false,
+                    'message' => lang('Accounts.error_different_customer'),
+                ]);
+            }
+
+            return $this->response->setJSON(['success' => true, 'payment' => $details]);
         } catch (RuntimeException $e) {
             return $this->response->setJSON(['success' => false, 'message' => $e->getMessage()]);
         }
@@ -481,11 +575,20 @@ class Accounts extends Secure_Controller
         }
 
         try {
-            $reason = $this->request->getPost('void_reason');
+            $reason = trim((string) ($this->request->getPost('void_reason') ?? ''));
+            if ($reason === '') {
+                return $this->response->setJSON([
+                    'success' => false,
+                    'message' => lang('Accounts.error_void_reason_required'),
+                ]);
+            }
+
+            $customerId = $this->request->getPost('customer_id');
             $this->accountLib->voidPayment(
                 $paymentId,
                 $employeeId,
-                $reason !== null && $reason !== '' ? (string) $reason : null
+                $reason,
+                $customerId !== null && $customerId !== '' ? (int) $customerId : null
             );
 
             return $this->response->setJSON([
@@ -527,8 +630,23 @@ class Accounts extends Secure_Controller
         }
 
         try {
+            $reason = trim((string) ($this->request->getPost('reallocate_reason') ?? ''));
+            if ($reason === '') {
+                return $this->response->setJSON([
+                    'success' => false,
+                    'message' => lang('Accounts.error_reallocate_reason_required'),
+                ]);
+            }
+
+            $customerId = $this->request->getPost('customer_id');
             $allocations = $this->parseMultiSaleAllocations();
-            $result = $this->accountLib->reallocatePayment($paymentId, $allocations, $employeeId);
+            $result = $this->accountLib->reallocatePayment(
+                $paymentId,
+                $allocations,
+                $employeeId,
+                $reason,
+                $customerId !== null && $customerId !== '' ? (int) $customerId : null
+            );
 
             return $this->response->setJSON([
                 'success'     => true,
@@ -751,8 +869,7 @@ class Accounts extends Secure_Controller
         };
 
         $pageOf = static function (string $key): int {
-            $page = (int) service('request')->getGet($key);
-            return max(1, $page);
+            return max(1, (int) service('request')->getGet($key));
         };
 
         $pick = static function (string $value, array $allowed): string {
@@ -764,7 +881,7 @@ class Accounts extends Secure_Controller
             'from'   => $date('outstanding_from'),
             'to'     => $date('outstanding_to'),
             'status' => $pick($get('outstanding_status'), ['unpaid', 'partially_paid']),
-            'page'   => $pageOf('outstanding_page'),
+            'page'   => 1,
         ];
         $ci = [
             'search'  => $get('ci_search'),
@@ -825,16 +942,6 @@ class Accounts extends Secure_Controller
             'transaction' => $markActive($transaction),
             'activity'    => $markActive($activity),
         ];
-    }
-
-    private function resolveSectionPage(int $sectionPage, string $sectionParam): int
-    {
-        $generic = (int) $this->request->getGet('page');
-        if ($generic > 0 && (int) $this->request->getGet($sectionParam) <= 0) {
-            return max(1, $generic);
-        }
-
-        return max(1, $sectionPage);
     }
 
     /**

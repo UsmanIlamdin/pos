@@ -17,7 +17,7 @@
 $invoice = $details['invoice'];
 $invoiceId = (int) $invoice['consolidated_invoice_id'];
 $summary = $details['summary'] ?? [];
-$invoiceColumns = 6;
+$invoiceColumns = 4;
 ?>
 
 <?= view('partial/header') ?>
@@ -91,40 +91,56 @@ $invoiceColumns = 6;
     <table id="items">
         <tr>
             <th><?= lang('Common.id') ?></th>
+            <th><?= lang('Reports.date') ?></th>
             <th><?= lang('Sales.invoice_number') ?></th>
-            <th><?= lang('Accounts.original_sales_total') ?></th>
-            <th><?= lang('Accounts.paid_on_sale') ?></th>
-            <th><?= lang('Accounts.sale_returns') ?></th>
-            <th><?= lang('Accounts.current_balance') ?></th>
+            <th><?= lang('Accounts.invoice_total') ?></th>
         </tr>
         <?php foreach ($details['sales'] as $sale): ?>
             <tr class="item-row">
                 <td><?= (int) $sale['sale_id'] ?></td>
+                <td><?= esc(to_datetime(strtotime((string) $sale['sale_time']))) ?></td>
                 <td class="item-name"><?= esc($sale['invoice_number'] ?? '') ?></td>
-                <td style="text-align: right;"><?= to_currency($sale['original_total'] ?? $sale['attached_amount']) ?></td>
-                <td style="text-align: right;"><?= to_currency($sale['paid_on_sale'] ?? 0) ?></td>
-                <td style="text-align: right;"><?= to_currency($sale['returns'] ?? 0) ?></td>
-                <td style="border-right: solid 1px; text-align: right;"><?= to_currency($sale['current_balance'] ?? $sale['outstanding'] ?? 0) ?></td>
+                <td style="border-right: solid 1px; text-align: right;"><?= to_currency($sale['original_total'] ?? $sale['attached_amount']) ?></td>
             </tr>
         <?php endforeach; ?>
 
+        <?php
+        $previouslyPaid = (float) ($summary['previously_paid_on_sales'] ?? 0);
+        $creditsApplied = (float) ($summary['credits_applied_to_sales'] ?? $details['credits_applied'] ?? 0);
+        $paymentsApplied = (float) ($summary['payments_applied'] ?? $details['paid'] ?? 0);
+        ?>
         <tr>
             <td class="blank" colspan="<?= $invoiceColumns ?>" style="text-align: center;"><?= '&nbsp;' ?></td>
         </tr>
-        <?= view('accounts/partials/invoice_print_totals', [
-            'summary'         => $summary,
-            'invoice_number'  => (string) $invoice['invoice_number'],
-            'blank_colspan'   => $invoiceColumns - 2,
-            'label_colspan'   => 1,
-        ]) ?>
-
-        <?php foreach ($details['payments'] as $payment): ?>
-            <tr>
-                <td colspan="<?= $invoiceColumns - 2 ?>" class="blank"> </td>
-                <td class="total-line"><?= esc($payment['payment_type']) ?></td>
-                <td class="total-value"><?= to_currency((float) $payment['payment_amount'] * -1) ?></td>
-            </tr>
-        <?php endforeach; ?>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 2 ?>" class="blank-bottom"> </td>
+            <td class="total-line"><?= lang('Accounts.invoice_total') ?></td>
+            <td class="total-value"><?= to_currency($summary['net_invoice_amount'] ?? $invoice['total_amount']) ?></td>
+        </tr>
+        <?php if ($previouslyPaid > 0.00001): ?>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 2 ?>" class="blank"> </td>
+            <td class="total-line"><?= lang('Accounts.previously_paid_on_sales') ?></td>
+            <td class="total-value"><?= to_currency(-$previouslyPaid) ?></td>
+        </tr>
+        <?php endif; ?>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 2 ?>" class="blank"> </td>
+            <td class="total-line"><?= lang('Accounts.payments_applied_to_ci') ?></td>
+            <td class="total-value"><?= to_currency($paymentsApplied) ?></td>
+        </tr>
+        <?php if ($creditsApplied > 0.00001): ?>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 2 ?>" class="blank"> </td>
+            <td class="total-line"><?= lang('Accounts.credits_applied_to_sales') ?></td>
+            <td class="total-value"><?= to_currency(-$creditsApplied) ?></td>
+        </tr>
+        <?php endif; ?>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 2 ?>" class="blank"> </td>
+            <td class="total-line"><?= lang('Accounts.balance_due') ?></td>
+            <td class="total-value"><?= to_currency($summary['balance_due'] ?? $details['balance']) ?></td>
+        </tr>
     </table>
 
     <div id="terms">
@@ -135,9 +151,7 @@ $invoiceColumns = 6;
                     <span style="padding: 4%;"><?= lang('Accounts.comment') . ': ' . esc($invoice['comment']) ?></span>
                 <?php endif; ?>
             </h5>
-            <?php if (!empty(trim((string) ($config['return_policy'] ?? '')))): ?>
-                <div style="padding: 2%;"><?= nl2br(esc($config['return_policy'] ?? '')) ?></div>
-            <?php endif; ?>
+            <div style="padding: 2%;"><?= nl2br(esc($config['return_policy'] ?? '')) ?></div>
         </div>
         <div id="barcode">
             <?= $barcode ?><br>

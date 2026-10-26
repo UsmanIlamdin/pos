@@ -166,87 +166,315 @@ class Consolidated_invoice_lib
         ];
     }
 
-    public function cancel(int $consolidatedInvoiceId): void
+    /**
+     * Legacy entry point — voids the consolidated invoice document.
+     * Payments and sale balances are never reversed by cancelling/voiding a CI.
+     */
+    public function cancel(int $consolidatedInvoiceId, ?string $reason = null, int $employeeId = 0, ?int $expectedCustomerId = null): void
     {
         $invoice = $this->getInvoiceOrFail($consolidatedInvoiceId);
         if ((int) $invoice['status'] === CI_STATUS_CANCELLED) {
             return;
         }
 
-        $paymentCount = $this->db->table('customer_account_payments')
-            ->where('consolidated_invoice_id', $consolidatedInvoiceId)
-            ->countAllResults();
+        $this->voidInvoice(
+            $consolidatedInvoiceId,
+            $employeeId > 0 ? $employeeId : (int) $invoice['employee_id'],
+            $reason !== null && trim($reason) !== '' ? $reason : lang('Accounts.void_invoice_default_reason'),
+            $expectedCustomerId
+        );
+    }
 
-        if ($paymentCount > 0) {
-            throw new RuntimeException(lang('Accounts.cannot_cancel_with_payments'));
+    /**
+     * Voids (cancels) a consolidated invoice document without reversing payments,
+     * allocations, or sale outstanding. Linked sales remain historically attached
+     * but are freed for a replacement open consolidated invoice.
+     *
+     * @throws RuntimeException when the invoice cannot be voided
+     */
+    /**
+     * @return array{
+     *   consolidated_invoice_id:int,
+     *   customer_id:int,
+     *   invoice_number:string,
+     *   customer_outstanding_before:float,
+     *   customer_outstanding_after:float,
+     *   sale_outstanding_after:list<array{sale_id:int, outstanding:float}>,
+     *   active_payment_total:float,
+     *   payments_preserved:bool
+     * }
+     */
+    public function voidInvoice(
+        int $consolidatedInvoiceId,
+        int $employeeId,
+        string $reason,
+        ?int $expectedCustomerId = null
+    ): array {
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new RuntimeException(lang('Accounts.error_void_reason_required'));
         }
 
         $this->db->transStart();
 
-        $this->db->table('consolidated_invoices')
-            ->where('consolidated_invoice_id', $consolidatedInvoiceId)
-            ->update(['status' => CI_STATUS_CANCELLED]);
+        try {
+            $invoice = $this->db->query(
+                'SELECT * FROM ' . $this->db->prefixTable('consolidated_invoices')
+                . ' WHERE consolidated_invoice_id = ? FOR UPDATE',
+                [$consolidatedInvoiceId]
+            )->getRowArray();
 
-        // Free sales for future consolidation (UNIQUE(sale_id) remains clean)
-        $this->db->table('consolidated_invoice_sales')
-            ->where('consolidated_invoice_id', $consolidatedInvoiceId)
-            ->delete();
+            if ($invoice === null) {
+                throw new RuntimeException(lang('Accounts.error_invoice_not_found'));
+            }
 
-        $this->db->transComplete();
-        if ($this->db->transStatus() === false) {
-            throw new RuntimeException('Failed to cancel consolidated invoice.');
+            $customerId = (int) $invoice['customer_id'];
+            if ($expectedCustomerId !== null && $customerId !== $expectedCustomerId) {
+                throw new RuntimeException(lang('Accounts.error_different_customer'));
+            }
+
+            if ((int) $invoice['status'] === CI_STATUS_CANCELLED) {
+                throw new RuntimeException(lang('Accounts.error_invoice_already_voided'));
+            }
+
+            $saleRows = $this->db->table('consolidated_invoice_sales')
+                ->select('sale_id, amount')
+                ->where('consolidated_invoice_id', $consolidatedInvoiceId)
+                ->get()
+                ->getResultArray();
+            $saleIds = array_map(static fn (array $row): int => (int) $row['sale_id'], $saleRows);
+            sort($saleIds);
+            $this->accountLib->lockSalesForUpdatePublic($saleIds);
+
+            $paidBefore = $this->moneyRound((float) $this->db->table('customer_account_payments')
+                ->select('COALESCE(SUM(payment_amount), 0) AS paid', false)
+                ->where('consolidated_invoice_id', $consolidatedInvoiceId)
+                ->where('status', CA_STATUS_ACTIVE)
+                ->get()
+                ->getRowArray()['paid'] ?? 0);
+            $saleOutstandingBefore = [];
+            foreach ($saleIds as $saleId) {
+                $saleOutstandingBefore[] = [
+                    'sale_id'     => $saleId,
+                    'outstanding' => $this->accountLib->getSaleOutstanding($saleId),
+                ];
+            }
+            $customerOutstandingBefore = $this->accountLib->getCustomerOutstanding($customerId);
+
+            $voidedAt = date('Y-m-d H:i:s');
+            $update = [
+                'status' => CI_STATUS_CANCELLED,
+            ];
+            if ($this->db->fieldExists('voided_at', 'consolidated_invoices')) {
+                $update['voided_at'] = $voidedAt;
+                $update['voided_by'] = $employeeId;
+                $update['void_reason'] = mb_substr($reason, 0, 255);
+            }
+
+            $this->db->table('consolidated_invoices')
+                ->where('consolidated_invoice_id', $consolidatedInvoiceId)
+                ->where('status !=', CI_STATUS_CANCELLED)
+                ->update($update);
+
+            if ($this->db->affectedRows() < 1) {
+                throw new RuntimeException(lang('Accounts.error_invoice_already_voided'));
+            }
+
+            // Keep consolidated_invoice_sales rows for history. Active CI membership
+            // is determined by invoice status != CANCELLED (see getActiveConsolidatedInvoiceId).
+            // Do not reverse payments or allocations — that is Void Payment.
+
+            $saleOutstandingAfter = [];
+            foreach ($saleIds as $saleId) {
+                $saleOutstandingAfter[] = [
+                    'sale_id'     => $saleId,
+                    'outstanding' => $this->accountLib->getSaleOutstanding($saleId),
+                ];
+            }
+            $customerOutstandingAfter = $this->accountLib->getCustomerOutstanding($customerId);
+
+            $this->accountLib->recordAuditEvent(
+                $customerId,
+                'invoice_voided',
+                'consolidated_invoice',
+                $consolidatedInvoiceId,
+                [
+                    'reason'                       => $reason,
+                    'invoice_number'               => (string) $invoice['invoice_number'],
+                    'invoice_total'                => (float) $invoice['total_amount'],
+                    'active_payment_total'         => $paidBefore,
+                    'sale_outstanding_before'      => $saleOutstandingBefore,
+                    'sale_outstanding_after'       => $saleOutstandingAfter,
+                    'customer_outstanding_before'  => $customerOutstandingBefore,
+                    'customer_outstanding_after'   => $customerOutstandingAfter,
+                    'sale_ids'                     => $saleIds,
+                    'payments_preserved'           => true,
+                    'voided_at'                    => $voidedAt,
+                ],
+                $employeeId
+            );
+
+            $this->db->transComplete();
+            if ($this->db->transStatus() === false) {
+                throw new RuntimeException(lang('Accounts.error_void_invoice_failed'));
+            }
+
+            return [
+                'consolidated_invoice_id'      => $consolidatedInvoiceId,
+                'customer_id'                  => $customerId,
+                'invoice_number'               => (string) $invoice['invoice_number'],
+                'customer_outstanding_before'  => $customerOutstandingBefore,
+                'customer_outstanding_after'   => $customerOutstandingAfter,
+                'sale_outstanding_after'       => $saleOutstandingAfter,
+                'active_payment_total'         => $paidBefore,
+                'payments_preserved'           => true,
+            ];
+        } catch (\Throwable $e) {
+            $this->db->transRollback();
+            throw $e;
         }
     }
 
     /**
-     * Authoritative CI balance = sum of outstanding on included underlying sales.
-     * Creating a CI never creates a new receivable; sales remain authoritative.
+     * Details for the Void Consolidated Invoice confirmation dialog.
+     *
+     * @return array<string, mixed>
      */
+    public function getInvoiceVoidDetails(int $consolidatedInvoiceId): array
+    {
+        $invoice = $this->getInvoiceOrFail($consolidatedInvoiceId);
+        $financials = $this->computeInvoiceFinancials($consolidatedInvoiceId);
+        $total = $this->moneyRound((float) $invoice['total_amount']);
+        // Document "total paid" is only active payments posted against this CI.
+        $paid = $this->moneyRound((float) $financials['payments_applied_to_ci']);
+        $balance = $this->getBalance($consolidatedInvoiceId);
+
+        $sales = $this->db->table('consolidated_invoice_sales AS cis')
+            ->select('cis.sale_id, cis.amount AS attached_amount, sales.invoice_number')
+            ->join('sales', 'sales.sale_id = cis.sale_id')
+            ->where('cis.consolidated_invoice_id', $consolidatedInvoiceId)
+            ->orderBy('cis.sale_id', 'asc')
+            ->get()
+            ->getResultArray();
+
+        $saleRows = [];
+        $saleOutstandingTotal = 0.0;
+        foreach ($sales as $sale) {
+            $saleId = (int) $sale['sale_id'];
+            $outstanding = $this->accountLib->getSaleOutstanding($saleId);
+            $saleOutstandingTotal += $outstanding;
+            $saleRows[] = [
+                'sale_id'                   => $saleId,
+                'invoice_number'            => $sale['invoice_number'] ?? null,
+                'attached_amount'           => $this->moneyRound((float) $sale['attached_amount']),
+                'attached_amount_formatted' => to_currency($this->moneyRound((float) $sale['attached_amount'])),
+                'outstanding'               => $outstanding,
+                'outstanding_formatted'     => to_currency($outstanding),
+            ];
+        }
+        $saleOutstandingTotal = $this->moneyRound($saleOutstandingTotal);
+        $activePaymentCount = (int) $this->db->table('customer_account_payments')
+            ->where('consolidated_invoice_id', $consolidatedInvoiceId)
+            ->where('status', CA_STATUS_ACTIVE)
+            ->countAllResults();
+
+        return [
+            'consolidated_invoice_id'      => (int) $invoice['consolidated_invoice_id'],
+            'customer_id'                  => (int) $invoice['customer_id'],
+            'invoice_number'               => (string) $invoice['invoice_number'],
+            'invoice_date'                 => (string) $invoice['invoice_date'],
+            'invoice_date_formatted'       => to_date(strtotime((string) $invoice['invoice_date'])),
+            'total_amount'                 => $total,
+            'total_amount_formatted'       => to_currency($total),
+            'total_paid'                   => $paid,
+            'total_paid_formatted'         => to_currency($paid),
+            'balance'                      => $balance,
+            'balance_formatted'            => to_currency($balance),
+            'previously_paid_on_sales'     => $this->moneyRound((float) $financials['previously_paid_on_sales']),
+            'sale_outstanding_total'       => $saleOutstandingTotal,
+            'sale_outstanding_total_formatted' => to_currency($saleOutstandingTotal),
+            'status'                       => (int) $invoice['status'],
+            'voided'                       => (int) $invoice['status'] === CI_STATUS_CANCELLED,
+            'void_reason'                  => $invoice['void_reason'] ?? null,
+            'voided_at'                    => $invoice['voided_at'] ?? null,
+            'voided_by'                    => isset($invoice['voided_by']) && $invoice['voided_by'] !== null
+                ? (int) $invoice['voided_by']
+                : null,
+            'sales'                        => $saleRows,
+            'active_payment_count'         => $activePaymentCount,
+            'payments_will_remain_active'  => $activePaymentCount > 0,
+            // Voiding the document does not change sale balances; only Void Payment does.
+            'receivables_after_void'       => $saleOutstandingTotal,
+            'receivables_after_void_formatted' => to_currency($saleOutstandingTotal),
+        ];
+    }
+
     public function getBalance(int $consolidatedInvoiceId): float
     {
         $invoice = $this->getInvoiceOrFail($consolidatedInvoiceId);
+
+        // Voided/cancelled documents are not receivable — balance is always zero.
+        // Active CI balance tracks live sale outstanding on attached sales so
+        // returns/credits/direct payments stay in sync with customer AR.
         if ((int) $invoice['status'] === CI_STATUS_CANCELLED) {
             return 0.0;
         }
 
-        return $this->computeInvoiceFinancials($consolidatedInvoiceId)['balance_due'];
+        return $this->getAttachedSaleOutstandingTotal($consolidatedInvoiceId);
     }
 
     /**
-     * Total settled against the document: prior sale payments + CI payments.
+     * Sum of current outstanding balances on sales attached to this CI.
      */
-    public function getPaidAmount(int $consolidatedInvoiceId): float
+    public function getAttachedSaleOutstandingTotal(int $consolidatedInvoiceId): float
     {
-        $invoice = $this->getInvoiceOrFail($consolidatedInvoiceId);
-        if ((int) $invoice['status'] === CI_STATUS_CANCELLED) {
-            return 0.0;
+        $saleIds = $this->db->table('consolidated_invoice_sales')
+            ->select('sale_id')
+            ->where('consolidated_invoice_id', $consolidatedInvoiceId)
+            ->get()
+            ->getResultArray();
+
+        $total = 0.0;
+        foreach ($saleIds as $row) {
+            $outstanding = $this->accountLib->getSaleOutstanding((int) $row['sale_id']);
+            if ($outstanding > 0) {
+                $total += $outstanding;
+            }
         }
 
-        $financials = $this->computeInvoiceFinancials($consolidatedInvoiceId);
-
-        return $this->moneyRound(
-            (float) $financials['previously_paid_on_sales'] + (float) $financials['payments_applied_to_ci']
-        );
+        return $this->moneyRound($total);
     }
 
-    public function refreshStatus(int $consolidatedInvoiceId): string
+    public function getPaidAmount(int $consolidatedInvoiceId): float
+    {
+        $this->getInvoiceOrFail($consolidatedInvoiceId);
+        $paidRow = $this->db->table('customer_account_payments')
+            ->select('COALESCE(SUM(payment_amount), 0) AS paid', false)
+            ->where('consolidated_invoice_id', $consolidatedInvoiceId)
+            ->where('status', CA_STATUS_ACTIVE)
+            ->get()
+            ->getRowArray();
+
+        return $this->moneyRound((float) ($paidRow['paid'] ?? 0));
+    }
+
+    public function refreshStatus(int $consolidatedInvoiceId): int
     {
         $invoice = $this->getInvoiceOrFail($consolidatedInvoiceId);
         if ((int) $invoice['status'] === CI_STATUS_CANCELLED) {
             return CI_STATUS_CANCELLED;
         }
 
-        $financials = $this->computeInvoiceFinancials($consolidatedInvoiceId);
-        $balance = (float) $financials['balance_due'];
-        $net = (float) $financials['net_invoice_amount'];
+        $balance = $this->getBalance($consolidatedInvoiceId);
+        $total = $this->moneyRound((float) $invoice['total_amount']);
         $status = CI_STATUS_OPEN;
 
-        if ($balance <= 0 && $net > 0) {
+        if ($balance <= 0 && $total > 0) {
             $status = CI_STATUS_PAID;
-        } elseif ($balance + 0.00001 < $net) {
-            $status = CI_STATUS_PARTIALLY_PAID;
-        } else {
+        } elseif ($balance + 0.00001 >= $total) {
             $status = CI_STATUS_OPEN;
+        } else {
+            $status = CI_STATUS_PARTIALLY_PAID;
         }
 
         $this->db->table('consolidated_invoices')
@@ -263,9 +491,6 @@ class Consolidated_invoice_lib
     {
         $this->refreshStatus($consolidatedInvoiceId);
         $invoice = $this->getInvoiceOrFail($consolidatedInvoiceId);
-        $financials = $this->computeInvoiceFinancials($consolidatedInvoiceId);
-        $saleIds = $financials['sale_ids'];
-
         $sales = $this->db->table('consolidated_invoice_sales AS cis')
             ->select('cis.sale_id, cis.amount AS attached_amount, sales.sale_time, sales.invoice_number, sales.sale_type, sales.customer_id')
             ->join('sales', 'sales.sale_id = cis.sale_id')
@@ -274,63 +499,139 @@ class Consolidated_invoice_lib
             ->get()
             ->getResultArray();
 
-        $saleSummaries = $financials['sale_summaries'];
-        $saleRows = [];
-        foreach ($sales as $sale) {
-            $saleId = (int) $sale['sale_id'];
-            $saleSummary = $saleSummaries[$saleId] ?? [
-                'original_total' => 0.0,
-                'paid_on_sale'   => 0.0,
-                'returns'        => 0.0,
-                'balance'        => 0.0,
-            ];
-            $saleRows[] = [
-                'sale_id'         => $saleId,
-                'sale_time'       => $sale['sale_time'],
-                'invoice_number'  => $sale['invoice_number'],
-                'sale_type'       => (int) $sale['sale_type'],
-                'attached_amount' => $this->moneyRound((float) $sale['attached_amount']),
-                'original_total'  => (float) $saleSummary['original_total'],
-                'paid_on_sale'    => (float) $saleSummary['paid_on_sale'],
-                'returns'         => (float) $saleSummary['returns'],
-                'outstanding'     => (float) $saleSummary['balance'],
-                'current_balance' => (float) $saleSummary['balance'],
-                'items'           => $this->getSaleItemRows($saleId),
-            ];
-        }
+        $saleIds = array_map(static fn (array $sale): int => (int) $sale['sale_id'], $sales);
+        $summaryMap = $this->accountLib->getSalesFinancialSummaryMap($saleIds);
 
+        $ciPaymentIds = [];
+        $activeCiPaymentIds = [];
+        // Include voided payments in history; only active ones affect paid totals.
         $payments = $this->db->table('customer_account_payments')
             ->where('consolidated_invoice_id', $consolidatedInvoiceId)
-            ->where('status', CA_STATUS_ACTIVE)
             ->orderBy('payment_time', 'asc')
             ->orderBy('payment_id', 'asc')
             ->get()
             ->getResultArray();
 
         $paymentRows = [];
+        $paymentsAppliedToCi = 0.0;
         foreach ($payments as $payment) {
             $paymentId = (int) $payment['payment_id'];
+            $isActive = (int) $payment['status'] === CA_STATUS_ACTIVE;
+            $amount = $this->moneyRound((float) $payment['payment_amount']);
+            $ciPaymentIds[] = $paymentId;
+            if ($isActive) {
+                $activeCiPaymentIds[] = $paymentId;
+                $paymentsAppliedToCi += $amount;
+            }
             $paymentRows[] = [
                 'payment_id'     => $paymentId,
                 'payment_type'   => (string) $payment['payment_type'],
-                'payment_amount' => $this->moneyRound((float) $payment['payment_amount']),
+                'payment_amount' => $amount,
                 'payment_time'   => $payment['payment_time'],
                 'reference_code' => (string) ($payment['reference_code'] ?? ''),
                 'comment'        => $payment['comment'] ?? '',
-                'allocations'    => $this->accountLib->getPaymentAllocations($paymentId),
+                'status'         => (int) $payment['status'],
+                'voided'         => !$isActive,
+                'void_reason'    => $payment['void_reason'] ?? null,
+                'voided_at'      => $payment['voided_at'] ?? null,
+                'allocations'    => $this->accountLib->getPaymentAllocations($paymentId, $isActive),
+            ];
+        }
+        $paymentsAppliedToCi = $this->moneyRound($paymentsAppliedToCi);
+
+        $ciAllocatedBySale = [];
+        if ($activeCiPaymentIds !== [] && $saleIds !== []) {
+            $ciAllocRows = $this->db->table('customer_payment_allocations')
+                ->select('sale_id, COALESCE(SUM(amount), 0) AS amount', false)
+                ->whereIn('customer_account_payment_id', $activeCiPaymentIds)
+                ->where('status', CA_STATUS_ACTIVE)
+                ->whereIn('sale_id', $saleIds)
+                ->groupBy('sale_id')
+                ->get()
+                ->getResultArray();
+            foreach ($ciAllocRows as $row) {
+                $ciAllocatedBySale[(int) $row['sale_id']] = $this->moneyRound((float) $row['amount']);
+            }
+        }
+
+        $saleRows = [];
+        $previouslyPaidOnSales = 0.0;
+        $creditsAppliedToSales = 0.0;
+        foreach ($sales as $sale) {
+            $saleId = (int) $sale['sale_id'];
+            $fin = $summaryMap[$saleId] ?? null;
+            $originalTotal = $fin !== null
+                ? $this->moneyRound((float) $fin['sale_total'])
+                : $this->moneyRound($this->accountLib->computeSaleTotal($saleId));
+            $paidOnSale = $fin !== null
+                ? $this->moneyRound((float) $fin['pos_payments'] + (float) $fin['account_allocations'])
+                : 0.0;
+            $creditAppsOnSale = $fin !== null
+                ? $this->moneyRound((float) ($fin['credit_applications'] ?? 0))
+                : 0.0;
+            $returnCreditsOnSale = $fin !== null
+                ? $this->moneyRound((float) $fin['credits_returns'])
+                : 0.0;
+            $returnsOnSale = $this->moneyRound(-$returnCreditsOnSale);
+            $currentBalance = $fin !== null
+                ? $this->moneyRound((float) $fin['balance'])
+                : $this->accountLib->getSaleOutstanding($saleId);
+            $ciAllocated = $ciAllocatedBySale[$saleId] ?? 0.0;
+            $priorPaid = $this->moneyRound(max(0, $paidOnSale - $ciAllocated));
+            $previouslyPaidOnSales += $priorPaid;
+            // Customer credit applied to attached sales (return credits stay in Returns section).
+            $creditsAppliedToSales += $creditAppsOnSale;
+
+            $saleRows[] = [
+                'sale_id'              => $saleId,
+                'sale_time'            => $sale['sale_time'],
+                'invoice_number'       => $sale['invoice_number'],
+                'sale_type'            => (int) $sale['sale_type'],
+                'attached_amount'      => $this->moneyRound((float) $sale['attached_amount']),
+                'original_total'       => $originalTotal,
+                'paid_on_sale'         => $priorPaid,
+                'credits_applied'      => $creditAppsOnSale,
+                'returns'              => $returnsOnSale,
+                'current_balance'      => $currentBalance,
+                'outstanding'          => $currentBalance,
+                'items'                => $this->getSaleItemRows($saleId),
             ];
         }
 
         $returnRows = $this->getReturnAdjustmentRows($saleIds);
+
+        $originalSalesTotal = $this->moneyRound(array_sum(array_map(static fn (array $sale): float => (float) $sale['original_total'], $saleRows)));
+        // Display-only return line items (may fund customer credit that is applied elsewhere).
+        $returnsTotal = $this->moneyRound(array_sum(array_map(static fn (array $row): float => (float) $row['amount'], $returnRows)));
+        $attachedTotal = $this->moneyRound((float) $invoice['total_amount']);
+        $previouslyPaidOnSales = $this->moneyRound($previouslyPaidOnSales);
+        $creditsAppliedToSales = $this->moneyRound($creditsAppliedToSales);
+        // Document cash paid = active CI-linked payments only.
+        $paid = $paymentsAppliedToCi;
+        // Settled toward this CI document (cash on CI + credits on attached sales).
+        $settledTotal = $this->moneyRound($paymentsAppliedToCi + $creditsAppliedToSales);
+        // Live receivable on underlying sales (source of truth for document balance).
+        $saleOutstandingTotal = $this->moneyRound(array_sum(array_map(
+            static fn (array $sale): float => (float) $sale['current_balance'],
+            $saleRows
+        )));
+        // Cancelled CI balance is always 0; otherwise balance = attached sale AR.
+        $documentBalance = (int) $invoice['status'] === CI_STATUS_CANCELLED
+            ? 0.0
+            : $saleOutstandingTotal;
+
         $summary = [
-            'original_sales_total'           => $financials['original_sales_total'],
-            'returns_total'                  => $financials['returns_total'],
-            'net_invoice_amount'             => $financials['net_invoice_amount'],
-            'previously_paid_on_sales'       => $financials['previously_paid_on_sales'],
-            'payments_applied_to_ci'         => $financials['payments_applied_to_ci'],
-            'payments_applied'               => $financials['payments_applied_to_ci'], // backward-compatible alias (CI-only)
-            'balance_due'                    => $financials['balance_due'],
-            'invoice_number'                 => (string) $invoice['invoice_number'],
+            'original_sales_total'       => $originalSalesTotal,
+            'returns_total'              => $returnsTotal,
+            'consolidated_invoice_total' => $attachedTotal,
+            'net_invoice_amount'         => $attachedTotal,
+            'previously_paid_on_sales'   => $previouslyPaidOnSales,
+            'credits_applied_to_sales'   => $creditsAppliedToSales,
+            'payments_applied_to_ci'     => $paymentsAppliedToCi,
+            'payments_applied'           => $paymentsAppliedToCi,
+            'settled_total'              => $settledTotal,
+            'balance_due'                => $documentBalance,
+            'sale_outstanding_total'     => $saleOutstandingTotal,
         ];
 
         return [
@@ -339,131 +640,60 @@ class Consolidated_invoice_lib
             'returns'         => $returnRows,
             'items'           => $this->getGroupedSaleItemRows($saleRows),
             'payments'        => $paymentRows,
-            'paid'            => $this->moneyRound(
-                (float) $financials['previously_paid_on_sales'] + (float) $financials['payments_applied_to_ci']
-            ),
-            'balance'         => $financials['balance_due'],
+            'paid'            => $paid,
+            'credits_applied' => $creditsAppliedToSales,
+            'settled'         => $settledTotal,
+            'balance'         => $documentBalance,
             'summary'         => $summary,
             'payment_summary' => $summary,
         ];
     }
 
     /**
-     * Single source of truth for consolidated-invoice arithmetic.
+     * Authoritative consolidated-invoice financial breakdown for reports/tests.
      *
-     * Balance Due always equals the sum of authoritative sale outstandings.
-     *
-     * @return array{
-     *   sale_ids:list<int>,
-     *   sale_summaries:array<int, array{original_total:float, paid_on_sale:float, returns:float, balance:float}>,
-     *   original_sales_total:float,
-     *   returns_total:float,
-     *   net_invoice_amount:float,
-     *   previously_paid_on_sales:float,
-     *   payments_applied_to_ci:float,
-     *   balance_due:float
-     * }
+     * @return array<string, float>
      */
     public function computeInvoiceFinancials(int $consolidatedInvoiceId): array
     {
-        $saleIds = $this->getIncludedSaleIds($consolidatedInvoiceId);
-        $summaries = $saleIds === []
-            ? []
-            : $this->accountLib->getSalesFinancialSummaryMap($saleIds);
-
-        $saleSummaries = [];
-        $originalSalesTotal = 0.0;
-        $returnsTotalAbs = 0.0;
-        $previouslyPaid = 0.0;
-        $balanceDue = 0.0;
-
-        foreach ($saleIds as $saleId) {
-            $summary = $summaries[$saleId] ?? [
-                'sale_total'          => 0.0,
-                'payments_applied'    => 0.0,
-                'credits_returns'     => 0.0,
-                'balance'             => 0.0,
-            ];
-
-            $ciAllocations = $this->getSaleAllocationsFromCi($saleId, $consolidatedInvoiceId);
-            // Payments on the sale excluding allocations that came from THIS consolidated invoice.
-            $paidOnSale = $this->moneyRound(max(0.0, (float) $summary['payments_applied'] - $ciAllocations));
-            $returnsAbs = $this->moneyRound((float) $summary['credits_returns']);
-            $original = $this->moneyRound((float) $summary['sale_total']);
-            $balance = $this->moneyRound((float) $summary['balance']);
-
-            $saleSummaries[$saleId] = [
-                'original_total' => $original,
-                'paid_on_sale'   => $paidOnSale,
-                'returns'        => $this->moneyRound(-$returnsAbs),
-                'balance'        => $balance,
-            ];
-
-            $originalSalesTotal += $original;
-            $returnsTotalAbs += $returnsAbs;
-            $previouslyPaid += $paidOnSale;
-            $balanceDue += $balance;
-        }
-
-        $paymentsAppliedToCi = $this->getPaymentsAppliedToCi($consolidatedInvoiceId);
-        $returnsTotal = $this->moneyRound(-$returnsTotalAbs);
-        $originalSalesTotal = $this->moneyRound($originalSalesTotal);
-        $previouslyPaid = $this->moneyRound($previouslyPaid);
-        $balanceDue = $this->moneyRound(max(0.0, $balanceDue));
-        $netInvoiceAmount = $this->moneyRound($originalSalesTotal + $returnsTotal);
+        $details = $this->getInvoiceDetails($consolidatedInvoiceId);
+        $summary = $details['summary'];
 
         return [
-            'sale_ids'                 => $saleIds,
-            'sale_summaries'           => $saleSummaries,
-            'original_sales_total'     => $originalSalesTotal,
-            'returns_total'            => $returnsTotal,
-            'net_invoice_amount'       => $netInvoiceAmount,
-            'previously_paid_on_sales' => $previouslyPaid,
-            'payments_applied_to_ci'   => $paymentsAppliedToCi,
-            'balance_due'              => $balanceDue,
+            'original_sales_total'     => (float) $summary['original_sales_total'],
+            'returns_total'            => (float) $summary['returns_total'],
+            'net_invoice_amount'       => (float) $summary['net_invoice_amount'],
+            'previously_paid_on_sales' => (float) $summary['previously_paid_on_sales'],
+            'credits_applied_to_sales' => (float) $summary['credits_applied_to_sales'],
+            'payments_applied_to_ci'   => (float) $summary['payments_applied_to_ci'],
+            'settled_total'            => (float) $summary['settled_total'],
+            'balance_due'              => (float) $summary['balance_due'],
         ];
     }
 
     /**
-     * @return list<int>
+     * Customer credit applications on sales attached to this CI.
      */
-    private function getIncludedSaleIds(int $consolidatedInvoiceId): array
+    public function getAttachedSaleCreditsTotal(int $consolidatedInvoiceId): float
     {
-        $sales = $this->db->table('consolidated_invoice_sales')
+        $saleIds = $this->db->table('consolidated_invoice_sales')
             ->select('sale_id')
             ->where('consolidated_invoice_id', $consolidatedInvoiceId)
-            ->orderBy('sale_id', 'asc')
             ->get()
             ->getResultArray();
+        if ($saleIds === []) {
+            return 0.0;
+        }
 
-        return array_map(static fn (array $row): int => (int) $row['sale_id'], $sales);
-    }
-
-    private function getPaymentsAppliedToCi(int $consolidatedInvoiceId): float
-    {
-        $paidRow = $this->db->table('customer_account_payments')
-            ->select('COALESCE(SUM(payment_amount), 0) AS paid', false)
-            ->where('consolidated_invoice_id', $consolidatedInvoiceId)
+        $ids = array_map(static fn (array $row): int => (int) $row['sale_id'], $saleIds);
+        $row = $this->db->table('customer_credit_applications')
+            ->select('COALESCE(SUM(amount), 0) AS credits', false)
+            ->whereIn('sale_id', $ids)
             ->where('status', CA_STATUS_ACTIVE)
             ->get()
             ->getRowArray();
 
-        return $this->moneyRound((float) ($paidRow['paid'] ?? 0));
-    }
-
-    private function getSaleAllocationsFromCi(int $saleId, int $consolidatedInvoiceId): float
-    {
-        $row = $this->db->table('customer_payment_allocations AS cpa')
-            ->select('COALESCE(SUM(cpa.amount), 0) AS allocated', false)
-            ->join('customer_account_payments AS cap', 'cap.payment_id = cpa.customer_account_payment_id')
-            ->where('cpa.sale_id', $saleId)
-            ->where('cap.consolidated_invoice_id', $consolidatedInvoiceId)
-            ->where('cpa.status', CA_STATUS_ACTIVE)
-            ->where('cap.status', CA_STATUS_ACTIVE)
-            ->get()
-            ->getRowArray();
-
-        return $this->moneyRound((float) ($row['allocated'] ?? 0));
+        return $this->moneyRound((float) ($row['credits'] ?? 0));
     }
 
     /**
@@ -519,59 +749,28 @@ class Consolidated_invoice_lib
             return [];
         }
 
-        // Only active, non-cash return credits reduce AR and belong on the CI document.
-        $credits = $this->db->table('customer_return_credits')
-            ->whereIn('original_sale_id', $saleIds)
-            ->where('status', CA_STATUS_ACTIVE)
-            ->where('settlement_mode !=', 'cash')
-            ->orderBy('created_at', 'asc')
-            ->orderBy('return_credit_id', 'asc')
+        $saleModel = model(Sale::class);
+        $builder = $this->db->table('sales');
+        $returns = $builder
+            ->whereIn('return_of_sale_id', $saleIds)
+            ->where('sale_type', SALE_TYPE_RETURN)
+            ->where('sale_status', COMPLETED)
+            ->orderBy('sale_time', 'asc')
+            ->orderBy('sale_id', 'asc')
             ->get()
             ->getResultArray();
 
-        if ($credits === []) {
-            return [];
-        }
-
-        $saleModel = model(Sale::class);
         $returnRows = [];
-
-        foreach ($credits as $credit) {
-            $returnSaleId = (int) $credit['return_sale_id'];
-            $originalSaleId = (int) ($credit['original_sale_id'] ?? 0);
-            $returnSale = $this->db->table('sales')->where('sale_id', $returnSaleId)->get()->getRowArray();
-            if ($returnSale === null || (int) $returnSale['sale_status'] !== COMPLETED) {
-                continue;
-            }
-
+        foreach ($returns as $returnSale) {
+            $returnSaleId = (int) $returnSale['sale_id'];
+            $originalSaleId = (int) ($returnSale['return_of_sale_id'] ?? 0);
             $relatedSale = $this->db->table('sales')
                 ->select('invoice_number, sale_time')
                 ->where('sale_id', $originalSaleId)
                 ->get()
                 ->getRowArray();
 
-            $items = $saleModel->get_sale_items_ordered($returnSaleId)->getResultArray();
-            if ($items === []) {
-                $amount = $this->moneyRound(-(float) $credit['return_amount']);
-                $returnRows[] = [
-                    'return_sale_id'   => $returnSaleId,
-                    'return_number'    => (string) ($returnSale['invoice_number'] ?? 'Return #' . $returnSaleId),
-                    'description'      => 'Return #' . $returnSaleId,
-                    'reference'        => 'Return #' . $returnSaleId,
-                    'related_sale_id'  => $originalSaleId,
-                    'related_sale'     => $relatedSale['invoice_number'] ?? ('Sale #' . $originalSaleId),
-                    'qty'              => 1.0,
-                    'quantity'         => 1.0,
-                    'unit_price'       => $this->moneyRound((float) $credit['return_amount']),
-                    'amount'           => $amount,
-                    'line_total'       => $amount,
-                    'sale_time'        => $returnSale['sale_time'],
-                    'return_total'     => $this->moneyRound((float) $credit['return_amount']),
-                ];
-                continue;
-            }
-
-            foreach ($items as $row) {
+            foreach ($saleModel->get_sale_items_ordered($returnSaleId)->getResultArray() as $row) {
                 $description = trim((string) ($row['name'] ?? $row['description'] ?? ''));
                 if ($description === '') {
                     $description = 'Returned Item #' . ((int) ($row['item_id'] ?? 0));
@@ -583,8 +782,8 @@ class Consolidated_invoice_lib
                 $amount = $this->moneyRound($lineTotal > 0 ? -$lineTotal : $lineTotal);
 
                 $returnRows[] = [
-                    'return_sale_id'   => $returnSaleId,
-                    'return_number'    => (string) ($returnSale['invoice_number'] ?? 'Return #' . $returnSaleId),
+                    'return_sale_id'    => $returnSaleId,
+                    'return_number'     => (string) ($returnSale['invoice_number'] ?? 'Return #' . $returnSaleId),
                     'description'      => $description,
                     'reference'        => 'Return #' . $returnSaleId,
                     'related_sale_id'  => $originalSaleId,
@@ -595,7 +794,7 @@ class Consolidated_invoice_lib
                     'amount'           => $amount,
                     'line_total'       => $amount,
                     'sale_time'        => $returnSale['sale_time'],
-                    'return_total'     => $this->moneyRound((float) $credit['return_amount']),
+                    'return_total'     => $this->moneyRound(abs((float) ($this->accountLib->computeSaleTotal($returnSaleId)))),
                 ];
             }
         }
@@ -696,16 +895,15 @@ class Consolidated_invoice_lib
      */
     public function getInvoiceSummary(int $consolidatedInvoiceId): array
     {
-        $financials = $this->computeInvoiceFinancials($consolidatedInvoiceId);
+        $details = $this->getInvoiceDetails($consolidatedInvoiceId);
+        $summary = $details['summary'];
 
         return [
-            'original_sales_total'     => $financials['original_sales_total'],
-            'returns_total'            => $financials['returns_total'],
-            'net_invoice_amount'       => $financials['net_invoice_amount'],
-            'previously_paid_on_sales' => $financials['previously_paid_on_sales'],
-            'payments_applied_to_ci'   => $financials['payments_applied_to_ci'],
-            'payments_applied'         => $financials['payments_applied_to_ci'],
-            'balance_due'              => $financials['balance_due'],
+            'original_sales_total' => $summary['original_sales_total'],
+            'returns_total'        => $summary['returns_total'],
+            'net_invoice_amount'   => $summary['net_invoice_amount'],
+            'payments_applied'     => $summary['payments_applied'],
+            'balance_due'          => $summary['balance_due'],
         ];
     }
 
@@ -719,26 +917,84 @@ class Consolidated_invoice_lib
 
     /**
      * Count open (non-cancelled, non-paid) consolidated invoices for summary headers.
+     * Refreshes status from live sale balances first so returns/credits are reflected.
      */
     public function countOpenForCustomer(int $customerId): int
     {
-        return $this->db->table('consolidated_invoices')
+        $rows = $this->db->table('consolidated_invoices')
+            ->select('consolidated_invoice_id')
             ->where('customer_id', $customerId)
-            ->whereNotIn('status', [CI_STATUS_CANCELLED, CI_STATUS_PAID])
-            ->countAllResults();
+            ->where('status !=', CI_STATUS_CANCELLED)
+            ->get()
+            ->getResultArray();
+
+        $count = 0;
+        foreach ($rows as $row) {
+            $id = (int) $row['consolidated_invoice_id'];
+            $this->refreshStatus($id);
+            // Live balance is authoritative (paid/settled-by-return ⇒ 0).
+            if ($this->getBalance($id) > 0.00001) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Sum of open CI balances for a customer (matches attached sale AR on those invoices).
+     */
+    public function getOpenBalanceTotalForCustomer(int $customerId): float
+    {
+        $total = 0.0;
+        foreach ($this->listOpenForCustomer($customerId) as $invoice) {
+            $total += (float) $invoice['balance'];
+        }
+
+        return $this->moneyRound($total);
+    }
+
+    /**
+     * Open consolidated invoices with a positive balance (for Add Payment targets).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listOpenForCustomer(int $customerId): array
+    {
+        $rows = $this->db->table('consolidated_invoices')
+            ->where('customer_id', $customerId)
+            ->where('status !=', CI_STATUS_CANCELLED)
+            ->orderBy('invoice_date', 'asc')
+            ->orderBy('consolidated_invoice_id', 'asc')
+            ->get()
+            ->getResultArray();
+
+        $open = [];
+        foreach ($rows as $row) {
+            $id = (int) $row['consolidated_invoice_id'];
+            $status = $this->refreshStatus($id);
+            $balance = $this->getBalance($id);
+            if ($balance <= 0.00001 || $status === CI_STATUS_PAID || $status === CI_STATUS_CANCELLED) {
+                continue;
+            }
+            $row = $this->getInvoiceOrFail($id);
+            $row['paid'] = $this->getPaidAmount($id);
+            $row['balance'] = $balance;
+            $row['status'] = $status;
+            $open[] = $row;
+        }
+
+        return $open;
     }
 
     /**
      * @return array{rows:list<array<string,mixed>>, total:int, page:int, per_page:int, total_pages:int}
      */
-    public function listForCustomerPaginated(
-        int $customerId,
-        int $page = 1,
-        int $perPage = Customer_account_lib::DEFAULT_PAGE_SIZE,
-        array $filters = []
-    ): array {
-        $builder = $this->customerInvoiceFilterBuilder($customerId, $filters);
-        $total = $builder->countAllResults();
+    public function listForCustomerPaginated(int $customerId, int $page = 1, int $perPage = Customer_account_lib::DEFAULT_PAGE_SIZE): array
+    {
+        $total = $this->db->table('consolidated_invoices')
+            ->where('customer_id', $customerId)
+            ->countAllResults();
 
         if ($perPage === PHP_INT_MAX || $perPage <= 0) {
             $perPage = max(1, $total ?: 1);
@@ -748,17 +1004,15 @@ class Consolidated_invoice_lib
         } else {
             $page = max(1, $page);
             $perPage = max(1, $perPage);
-            $totalPages = max(1, (int) ceil(($total ?: 1) / $perPage));
-            if ($total === 0) {
-                $totalPages = 1;
-            }
+            $totalPages = max(1, (int) ceil($total / $perPage));
             if ($page > $totalPages) {
                 $page = $totalPages;
             }
             $offset = ($page - 1) * $perPage;
         }
 
-        $builder = $this->customerInvoiceFilterBuilder($customerId, $filters)
+        $builder = $this->db->table('consolidated_invoices')
+            ->where('customer_id', $customerId)
             ->orderBy('invoice_date', 'desc')
             ->orderBy('consolidated_invoice_id', 'desc');
 
@@ -770,18 +1024,15 @@ class Consolidated_invoice_lib
 
         foreach ($rows as &$row) {
             $id = (int) $row['consolidated_invoice_id'];
-            $financials = $this->computeInvoiceFinancials($id);
-            // Display document totals from live sale arithmetic, not the snapshot at create time.
-            $row['total_amount'] = $financials['net_invoice_amount'];
-            $row['paid'] = $this->moneyRound(
-                (float) $financials['previously_paid_on_sales'] + (float) $financials['payments_applied_to_ci']
-            );
-            $row['balance'] = $financials['balance_due'];
+            $ciPayments = $this->getPaidAmount($id);
+            $creditsApplied = $this->getAttachedSaleCreditsTotal($id);
+            // List "Total Paid" includes CI cash payments + customer credit applied to attached sales
+            // so Invoice Total − Total Paid aligns with Balance when credits settle part of the CI.
+            $row['ci_payments'] = $ciPayments;
+            $row['credits_applied'] = $creditsApplied;
+            $row['paid'] = $this->moneyRound($ciPayments + $creditsApplied);
+            $row['balance'] = $this->getBalance($id);
             $row['status'] = $this->refreshStatus($id);
-            $row['original_sales_total'] = $financials['original_sales_total'];
-            $row['returns_total'] = $financials['returns_total'];
-            $row['previously_paid_on_sales'] = $financials['previously_paid_on_sales'];
-            $row['payments_applied_to_ci'] = $financials['payments_applied_to_ci'];
         }
         unset($row);
 
@@ -802,48 +1053,6 @@ class Consolidated_invoice_lib
         $config->batch_save(['last_used_consolidated_invoice_number' => (string) $next]);
 
         return sprintf('CI-%06d', $next);
-    }
-
-    /**
-     * @param array<string, mixed> $filters
-     */
-    private function customerInvoiceFilterBuilder(int $customerId, array $filters)
-    {
-        $builder = $this->db->table('consolidated_invoices')
-            ->where('customer_id', $customerId);
-
-        $search = trim((string) ($filters['search'] ?? ''));
-        if ($search !== '') {
-            $builder->like('invoice_number', $search);
-        }
-
-        $from = $this->accountLib->sanitizeFilterDate($filters['from'] ?? null);
-        $to = $this->accountLib->sanitizeFilterDate($filters['to'] ?? null);
-        if ($from !== null) {
-            $builder->where('invoice_date >=', $from);
-        }
-        if ($to !== null) {
-            $builder->where('invoice_date <=', $to);
-        }
-
-        $status = (string) ($filters['status'] ?? '');
-        $statusMap = [
-            'paid'           => [CI_STATUS_PAID],
-            'partially_paid' => [CI_STATUS_PARTIALLY_PAID],
-            'unpaid'         => [CI_STATUS_OPEN, CI_STATUS_DRAFT],
-        ];
-        if (isset($statusMap[$status])) {
-            $builder->whereIn('status', $statusMap[$status]);
-        }
-
-        $balance = (string) ($filters['balance'] ?? '');
-        if ($balance === 'with_balance') {
-            $builder->whereNotIn('status', [CI_STATUS_PAID, CI_STATUS_CANCELLED]);
-        } elseif ($balance === 'fully_paid') {
-            $builder->where('status', CI_STATUS_PAID);
-        }
-
-        return $builder;
     }
 
     /**

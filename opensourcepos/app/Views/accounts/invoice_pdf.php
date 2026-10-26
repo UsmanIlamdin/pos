@@ -108,30 +108,54 @@ $summary = $details['summary'] ?? [];
         <thead>
         <tr>
             <th><?= lang('Common.id') ?></th>
+            <th><?= lang('Reports.date') ?></th>
             <th><?= lang('Sales.invoice_number') ?></th>
-            <th class="right"><?= lang('Accounts.original_sales_total') ?></th>
-            <th class="right"><?= lang('Accounts.paid_on_sale') ?></th>
-            <th class="right"><?= lang('Accounts.sale_returns') ?></th>
-            <th class="right"><?= lang('Accounts.current_balance') ?></th>
+            <th class="right"><?= lang('Accounts.invoice_total') ?></th>
         </tr>
         </thead>
         <tbody>
         <?php foreach ($details['sales'] as $sale): ?>
             <tr>
                 <td><?= (int) $sale['sale_id'] ?></td>
+                <td><?= esc(to_datetime(strtotime((string) $sale['sale_time']))) ?></td>
                 <td><?= esc($sale['invoice_number'] ?? '') ?></td>
                 <td class="right"><?= to_currency($sale['original_total'] ?? $sale['attached_amount']) ?></td>
-                <td class="right"><?= to_currency($sale['paid_on_sale'] ?? 0) ?></td>
-                <td class="right"><?= to_currency($sale['returns'] ?? 0) ?></td>
-                <td class="right"><?= to_currency($sale['current_balance'] ?? $sale['outstanding'] ?? 0) ?></td>
             </tr>
         <?php endforeach; ?>
-        <?= view('accounts/partials/invoice_print_totals', [
-            'summary'         => $summary,
-            'invoice_number'  => (string) $invoice['invoice_number'],
-            'blank_colspan'   => 4,
-            'label_colspan'   => 1,
-        ]) ?>
+        <?php
+        $previouslyPaid = (float) ($summary['previously_paid_on_sales'] ?? 0);
+        $creditsApplied = (float) ($summary['credits_applied_to_sales'] ?? $details['credits_applied'] ?? 0);
+        $paymentsApplied = (float) ($summary['payments_applied'] ?? $details['paid'] ?? 0);
+        ?>
+        <tr>
+            <td class="blank" colspan="2"></td>
+            <td class="total-line"><?= lang('Accounts.invoice_total') ?></td>
+            <td class="total-value"><?= to_currency($summary['net_invoice_amount'] ?? $invoice['total_amount']) ?></td>
+        </tr>
+        <?php if ($previouslyPaid > 0.00001): ?>
+        <tr>
+            <td class="blank" colspan="2"></td>
+            <td class="total-line"><?= lang('Accounts.previously_paid_on_sales') ?></td>
+            <td class="total-value"><?= to_currency(-$previouslyPaid) ?></td>
+        </tr>
+        <?php endif; ?>
+        <tr>
+            <td class="blank" colspan="2"></td>
+            <td class="total-line"><?= lang('Accounts.payments_applied_to_ci') ?></td>
+            <td class="total-value"><?= to_currency($paymentsApplied) ?></td>
+        </tr>
+        <?php if ($creditsApplied > 0.00001): ?>
+        <tr>
+            <td class="blank" colspan="2"></td>
+            <td class="total-line"><?= lang('Accounts.credits_applied_to_sales') ?></td>
+            <td class="total-value"><?= to_currency(-$creditsApplied) ?></td>
+        </tr>
+        <?php endif; ?>
+        <tr>
+            <td class="blank" colspan="2"></td>
+            <td class="total-line"><?= lang('Accounts.balance_due') ?></td>
+            <td class="total-value"><?= to_currency($summary['balance_due'] ?? $details['balance']) ?></td>
+        </tr>
         </tbody>
     </table>
 
@@ -140,9 +164,7 @@ $summary = $details['summary'] ?? [];
         <?php if (!empty($invoice['comment'])): ?>
             <div style="margin-top: 8px;"><?= lang('Accounts.comment') ?>: <?= esc($invoice['comment']) ?></div>
         <?php endif; ?>
-        <?php if (!empty(trim((string) ($config['return_policy'] ?? '')))): ?>
-            <div style="margin-top: 8px;"><?= nl2br(esc($config['return_policy'] ?? '')) ?></div>
-        <?php endif; ?>
+        <div style="margin-top: 8px;"><?= nl2br(esc($config['return_policy'] ?? '')) ?></div>
         <div id="barcode">
             <?= $barcode ?><br>
             <?= esc($invoice['invoice_number']) ?>

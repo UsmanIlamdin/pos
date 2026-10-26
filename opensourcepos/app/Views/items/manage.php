@@ -63,16 +63,6 @@ use App\Models\Employee;
             );
         });
 
-        $('#export_csv').click(function(e) {
-            e.preventDefault();
-            const ids = table_support.selected_ids();
-            let url = '<?= esc(site_url("$controller_name/generateCsvFile"), 'js') ?>';
-            if (ids.length) {
-                url += (url.indexOf('?') === -1 ? '?' : '&') + $.param({ ids: ids });
-            }
-            window.location.href = url;
-        });
-
         // Load the preset daterange picker
         <?= view('partial/daterangepicker') ?>
         // Set the beginning of time as starting date
@@ -277,17 +267,13 @@ use App\Models\Employee;
 <?= view('partial/table_filter_persistence', ['additional_params' => ['stock_location']]) ?>
 
 <div id="title_bar" class="btn-toolbar print_hide">
-    <button class="btn btn-info btn-sm pull-right modal-dlg" data-btn-new="<?= lang('Common.new') ?>" data-btn-submit="<?= lang('Common.submit') ?>" data-href="<?= "$controller_name/view" ?>" title="<?= lang(ucfirst($controller_name) . '.new') ?>">
-        <span class="glyphicon glyphicon-tag">&nbsp;</span><?= lang(ucfirst($controller_name) . '.new') ?>
-    </button>
-
     <button class="btn btn-info btn-sm pull-right modal-dlg" data-btn-submit="<?= lang('Common.submit') ?>" data-href="<?= "$controller_name/csvImport" ?>" title="<?= lang('Items.import_items_csv') ?>">
         <span class="glyphicon glyphicon-import">&nbsp;</span><?= lang('Common.import_csv') ?>
     </button>
 
-    <a id="export_csv" class="btn btn-info btn-sm pull-right" href="<?= esc(site_url("$controller_name/generateCsvFile"), 'attr') ?>" title="<?= lang('Common.export_csv') ?>">
-        <span class="glyphicon glyphicon-export">&nbsp;</span><?= lang('Common.export_csv') ?>
-    </a>
+    <button class="btn btn-info btn-sm pull-right modal-dlg" data-btn-new="<?= lang('Common.new') ?>" data-btn-submit="<?= lang('Common.submit') ?>" data-href="<?= "$controller_name/view" ?>" title="<?= lang(ucfirst($controller_name) . '.new') ?>">
+        <span class="glyphicon glyphicon-tag">&nbsp;</span><?= lang(ucfirst($controller_name) . '.new') ?>
+    </button>
 </div>
 
 <div id="toolbar">

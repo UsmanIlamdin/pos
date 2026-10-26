@@ -146,13 +146,6 @@ $invoiceColumns = 5;
                 <td colspan="2" class="total-line"><?= lang('Accounts.sale_total') ?></td>
                 <td class="total-value"><?= to_currency($saleTotal) ?></td>
             </tr>
-            <?php if ((float) ($sale['paid_on_sale'] ?? 0) > 0): ?>
-                <tr>
-                    <td colspan="<?= $invoiceColumns - 3 ?>" class="blank"> </td>
-                    <td colspan="2" class="total-line"><?= lang('Accounts.paid_on_sale') ?></td>
-                    <td class="total-value"><?= to_currency((float) $sale['paid_on_sale'] * -1) ?></td>
-                </tr>
-            <?php endif; ?>
             <?php foreach ($salePaymentLines as $salePayment): ?>
                 <tr>
                     <td colspan="<?= $invoiceColumns - 3 ?>" class="blank"> </td>
@@ -189,12 +182,54 @@ $invoiceColumns = 5;
         <tr>
             <td class="blank" colspan="<?= $invoiceColumns ?>" style="text-align: center;"><?= '&nbsp;' ?></td>
         </tr>
-        <?= view('accounts/partials/invoice_print_totals', [
-            'summary'         => $summary,
-            'invoice_number'  => (string) $invoice['invoice_number'],
-            'blank_colspan'   => $invoiceColumns - 3,
-            'label_colspan'   => 2,
-        ]) ?>
+        <?php
+        $previouslyPaid = (float) ($summary['previously_paid_on_sales'] ?? 0);
+        $creditsApplied = (float) ($summary['credits_applied_to_sales'] ?? 0);
+        $showFootingDetail = $hasReturns || $previouslyPaid > 0.00001 || $creditsApplied > 0.00001;
+        ?>
+        <?php if ($showFootingDetail): ?>
+            <tr>
+                <td colspan="<?= $invoiceColumns - 3 ?>" class="blank-bottom"> </td>
+                <td colspan="2" class="total-line"><?= lang('Accounts.original_sales_total') ?></td>
+                <td class="total-value"><?= to_currency($summary['original_sales_total'] ?? $invoice['total_amount']) ?></td>
+            </tr>
+            <?php if ($hasReturns): ?>
+            <tr>
+                <td colspan="<?= $invoiceColumns - 3 ?>" class="blank"> </td>
+                <td colspan="2" class="total-line"><?= lang('Accounts.returns_total') ?></td>
+                <td class="total-value"><?= to_currency($returnsTotal) ?></td>
+            </tr>
+            <?php endif; ?>
+            <?php if ($previouslyPaid > 0.00001): ?>
+            <tr>
+                <td colspan="<?= $invoiceColumns - 3 ?>" class="blank"> </td>
+                <td colspan="2" class="total-line"><?= lang('Accounts.previously_paid_on_sales') ?></td>
+                <td class="total-value"><?= to_currency(-$previouslyPaid) ?></td>
+            </tr>
+            <?php endif; ?>
+        <?php endif; ?>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 3 ?>" class="<?= $showFootingDetail ? 'blank' : 'blank-bottom' ?>"> </td>
+            <td colspan="2" class="total-line"><?= lang('Accounts.net_invoice_amount') ?></td>
+            <td class="total-value"><?= to_currency($summary['net_invoice_amount'] ?? $invoice['total_amount']) ?></td>
+        </tr>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 3 ?>" class="blank"> </td>
+            <td colspan="2" class="total-line"><?= lang('Accounts.payments_applied_to_ci') ?></td>
+            <td class="total-value"><?= to_currency($summary['payments_applied'] ?? $details['paid']) ?></td>
+        </tr>
+        <?php if ($creditsApplied > 0.00001): ?>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 3 ?>" class="blank"> </td>
+            <td colspan="2" class="total-line"><?= lang('Accounts.credits_applied_to_sales') ?></td>
+            <td class="total-value"><?= to_currency(-$creditsApplied) ?></td>
+        </tr>
+        <?php endif; ?>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 3 ?>" class="blank"> </td>
+            <td colspan="2" class="total-line"><?= lang('Accounts.balance_due') ?></td>
+            <td class="total-value"><?= to_currency($summary['balance_due'] ?? $details['balance']) ?></td>
+        </tr>
         <?php
         // Fallback: payments with no sale allocations still show as a single line.
         $unallocatedPayments = [];
@@ -226,9 +261,7 @@ $invoiceColumns = 5;
                     <span style="padding: 4%;"><?= lang('Accounts.comment') . ': ' . esc($invoice['comment']) ?></span>
                 <?php endif; ?>
             </h5>
-            <?php if (!empty(trim((string) ($config['return_policy'] ?? '')))): ?>
-                <div style="padding: 2%;"><?= nl2br(esc($config['return_policy'] ?? '')) ?></div>
-            <?php endif; ?>
+            <div style="padding: 2%;"><?= nl2br(esc($config['return_policy'] ?? '')) ?></div>
         </div>
         <div id="barcode">
             <?= $barcode ?><br>

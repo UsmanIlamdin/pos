@@ -140,6 +140,14 @@
             self.updateMeta();
             self.updatePager();
             self.updateLoadMore();
+
+            if (
+                self.key === 'outstanding'
+                && response.summary
+                && typeof response.summary.outstanding_sales_count !== 'undefined'
+            ) {
+                $('#account-outstanding-count').text(response.summary.outstanding_sales_count);
+            }
         }).fail(function (xhr, status) {
             if (status === 'abort' || seq !== self.requestSeq) {
                 return;

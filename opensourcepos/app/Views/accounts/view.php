@@ -19,7 +19,18 @@
  */
 
 $openInvoices = $open_invoices ?? [];
+$payable_sales = $payable_sales ?? [];
+$hasPayableSales = $payable_sales !== [];
+$hasOpenInvoices = $openInvoices !== [];
 $defaultSaleId = count($payable_sales) === 1 ? (int) $payable_sales[0]['sale_id'] : '';
+$defaultApplyTo = '';
+if ($hasOpenInvoices && !$hasPayableSales) {
+    $defaultApplyTo = 'consolidated_invoice';
+} elseif ($hasPayableSales && !$hasOpenInvoices) {
+    $defaultApplyTo = count($payable_sales) === 1 ? 'sale' : 'sales';
+} elseif ($hasPayableSales) {
+    $defaultApplyTo = $defaultSaleId !== '' ? 'sale' : '';
+}
 $account_filters = $account_filters ?? [
     'outstanding' => ['search' => '', 'from' => '', 'to' => '', 'status' => '', 'active' => false],
     'ci'          => ['search' => '', 'from' => '', 'to' => '', 'status' => '', 'balance' => '', 'page' => 1, 'active' => false],
@@ -27,7 +38,7 @@ $account_filters = $account_filters ?? [
     'transaction' => ['search' => '', 'from' => '', 'to' => '', 'type' => '', 'side' => '', 'page' => 1, 'active' => false],
     'activity'    => ['search' => '', 'from' => '', 'to' => '', 'type' => '', 'voided' => '', 'page' => 1, 'active' => false],
 ];
-$outstanding_sales_all = $outstanding_sales_all ?? [];
+$outstanding_sales_all = $outstanding_sales_all ?? ($outstanding_sales ?? []);
 $can_void = $can_void ?? false;
 $can_reallocate = $can_reallocate ?? false;
 $can_credit_apply = $can_credit_apply ?? false;
@@ -63,12 +74,15 @@ $typeChoices = [
         function toggleApplyTo() {
             const applyTo = $('#apply_to').val();
             $('.apply-sale-group, .apply-sales-group, .apply-ci-group').hide();
+            $('#sale_id, #consolidated_invoice_id').prop('required', false);
             if (applyTo === 'sale') {
                 $('.apply-sale-group').show();
+                $('#sale_id').prop('required', true);
             } else if (applyTo === 'sales') {
                 $('.apply-sales-group').show();
             } else if (applyTo === 'consolidated_invoice') {
                 $('.apply-ci-group').show();
+                $('#consolidated_invoice_id').prop('required', true);
             }
         }
 
@@ -123,39 +137,145 @@ $typeChoices = [
             $(this).text(open ? '+' : '−');
         });
 
+        const resetVoidModal = function() {
+            $('#void-payment-id').val('');
+            $('#void-payment-reason').val('').closest('.form-group').removeClass('has-error');
+            $('#void-payment-error').hide().text('');
+            $('#void-payment-loading').show();
+            $('#void-payment-details').hide();
+            $('#void-payment-allocations').empty();
+            $('#void-payment-invoice-row').hide();
+            $('#confirm-void-payment').prop('disabled', true);
+        };
+
+        const populateVoidModal = function(payment) {
+            const title = <?= json_encode(lang('Accounts.void_payment_confirm_title')) ?>
+                .replace('{0}', payment.payment_id);
+            $('#void-payment-title').text(title);
+            $('#void-payment-number').text('#' + payment.payment_id);
+            $('#void-payment-date').text(payment.payment_time_formatted || payment.payment_time || '');
+            $('#void-payment-method').text(payment.payment_type || '');
+            $('#void-payment-amount').text(payment.payment_amount_formatted || payment.payment_amount || '');
+
+            const $allocBody = $('#void-payment-allocations').empty();
+            (payment.allocations || []).forEach(function(alloc) {
+                let saleLabel = 'Sale #' + alloc.sale_id;
+                if (alloc.invoice_number) {
+                    saleLabel += ' / ' + alloc.invoice_number;
+                }
+                $allocBody.append(
+                    '<tr><td>' + $('<div>').text(saleLabel).html() +
+                    '</td><td class="text-right">' +
+                    $('<div>').text(alloc.amount_formatted || alloc.amount || '').html() +
+                    '</td></tr>'
+                );
+            });
+            if (!(payment.allocations || []).length) {
+                $allocBody.append(
+                    '<tr><td colspan="2"><em>' + <?= json_encode(lang('Common.none_selected_text')) ?> + '</em></td></tr>'
+                );
+            }
+
+            if (payment.consolidated_invoice_number) {
+                $('#void-payment-invoice').text(payment.consolidated_invoice_number);
+                $('#void-payment-invoice-row').show();
+            } else {
+                $('#void-payment-invoice-row').hide();
+            }
+
+            $('#void-payment-loading').hide();
+            $('#void-payment-details').show();
+            $('#confirm-void-payment').prop('disabled', !!payment.voided);
+            if (payment.voided) {
+                $('#void-payment-error').text(<?= json_encode(lang('Accounts.error_payment_already_voided')) ?>).show();
+            }
+        };
+
         $(document).on('click', '.void-payment', function() {
             const paymentId = $(this).data('payment-id');
             if (!paymentId) {
                 return;
             }
+            resetVoidModal();
             $('#void-payment-id').val(paymentId);
             $('#void-payment-modal').modal('show');
+
+            $.getJSON(<?= json_encode(site_url('accounts/paymentDetails')) ?> + '/' + paymentId, {
+                customer_id: customerId
+            }).done(function(response) {
+                if (!response || !response.success || !response.payment) {
+                    $('#void-payment-loading').hide();
+                    $('#void-payment-error').text(
+                        (response && response.message) || <?= json_encode(lang('Accounts.error_loading_payment')) ?>
+                    ).show();
+                    return;
+                }
+                populateVoidModal(response.payment);
+            }).fail(function() {
+                $('#void-payment-loading').hide();
+                $('#void-payment-error').text(<?= json_encode(lang('Accounts.error_loading_payment')) ?>).show();
+            });
         });
 
         $(document).on('click', '#confirm-void-payment', function() {
             const paymentId = $('#void-payment-id').val();
+            const reason = $.trim($('#void-payment-reason').val() || '');
             if (!paymentId) {
+                return;
+            }
+            if (!reason) {
+                $('#void-payment-reason').closest('.form-group').addClass('has-error');
+                $('#void-payment-error').text(<?= json_encode(lang('Accounts.error_void_reason_required')) ?>).show();
                 return;
             }
 
             const $button = $(this);
             $button.prop('disabled', true);
-            $.post('<?= site_url('accounts/voidPayment') ?>/' + paymentId, {
-                void_reason: '',
+            $('#void-payment-error').hide().text('');
+            $('#void-payment-reason').closest('.form-group').removeClass('has-error');
+
+            $.post(<?= json_encode(site_url('accounts/voidPayment')) ?> + '/' + paymentId, {
+                void_reason: reason,
+                customer_id: customerId,
                 idempotency_key: uuid()
             }, function(response) {
                 $.notify({ message: response.message }, { type: response.success ? 'success' : 'danger' });
-                if (response.success) {
-                    $('#void-payment-modal').modal('hide');
+                if (!response.success) {
+                    return;
+                }
+                $('#void-payment-modal').modal('hide');
+                if (response.summary) {
+                    if (response.summary.outstanding_balance_formatted) {
+                        $('#account-outstanding-balance').text(response.summary.outstanding_balance_formatted);
+                    }
+                    if (typeof response.summary.outstanding_count !== 'undefined') {
+                        $('#account-outstanding-count').text(response.summary.outstanding_count);
+                    }
+                    if (typeof response.summary.open_invoice_count !== 'undefined') {
+                        $('#account-open-invoice-count').text(response.summary.open_invoice_count);
+                    }
+                    if (response.summary.customer_credit_formatted) {
+                        $('#account-customer-credit').text(response.summary.customer_credit_formatted);
+                    }
+                }
+                if (window.accountsViewApi && typeof window.accountsViewApi.refreshAll === 'function') {
+                    window.accountsViewApi.refreshAll();
+                } else {
                     window.location.reload();
                 }
-            }, 'json').always(function() {
+            }, 'json').fail(function(xhr) {
+                const message = (xhr.responseJSON && xhr.responseJSON.message)
+                    ? xhr.responseJSON.message
+                    : <?= json_encode(lang('Accounts.error_void_failed')) ?>;
+                $('#void-payment-error').text(message).show();
+                $.notify({ message: message }, { type: 'danger' });
+            }).always(function() {
                 $button.prop('disabled', false);
             });
         });
 
         $('#void-payment-modal').on('hidden.bs.modal', function() {
-            $('#void-payment-id').val('');
+            resetVoidModal();
         });
 
         $(document).on('click', '.reallocate-payment', function() {
@@ -166,8 +286,12 @@ $typeChoices = [
             const $modal = $('#reallocate-modal');
             const $body = $('#reallocate-sales');
             $body.empty();
+            $('#reallocate-reason').val('').closest('.form-group').removeClass('has-error');
+            $('#reallocate-error').hide().text('');
             $('#reallocate-help').text(<?= json_encode(lang('Accounts.change_allocation_help')) ?>);
             $('#reallocate-payment-id').val(paymentId);
+            $('#reallocate-customer-id').val(customerId);
+            $('#reallocate-submit').prop('disabled', false);
             $.getJSON('<?= site_url('accounts/reallocatePayment') ?>/' + paymentId, function(response) {
                 if (!response.success) {
                     $.notify({ message: response.message }, { type: 'danger' });
@@ -198,12 +322,36 @@ $typeChoices = [
         $('#reallocate-form').on('submit', function(e) {
             e.preventDefault();
             const paymentId = $('#reallocate-payment-id').val();
+            const reason = $.trim($('#reallocate-reason').val() || '');
+            const $submit = $('#reallocate-submit');
+            if (!reason) {
+                $('#reallocate-reason').closest('.form-group').addClass('has-error');
+                $('#reallocate-error').text(<?= json_encode(lang('Accounts.error_reallocate_reason_required')) ?>).show();
+                return;
+            }
+            if ($submit.prop('disabled')) {
+                return;
+            }
+            $submit.prop('disabled', true);
+            $('#reallocate-error').hide().text('');
+            $('#reallocate-reason').closest('.form-group').removeClass('has-error');
             $.post('<?= site_url('accounts/reallocatePayment') ?>/' + paymentId, $(this).serialize(), function(response) {
                 $.notify({ message: response.message }, { type: response.success ? 'success' : 'danger' });
                 if (response.success) {
-                    window.location.reload();
+                    $('#reallocate-modal').modal('hide');
+                    if (window.accountsViewApi && typeof window.accountsViewApi.refreshAll === 'function') {
+                        window.accountsViewApi.refreshAll();
+                    } else {
+                        window.location.reload();
+                    }
+                    return;
                 }
-            }, 'json');
+                $submit.prop('disabled', false);
+                $('#reallocate-error').text(response.message || <?= json_encode(lang('Accounts.error_reallocate_failed')) ?>).show();
+            }, 'json').fail(function() {
+                $submit.prop('disabled', false);
+                $('#reallocate-error').text(<?= json_encode(lang('Accounts.error_reallocate_failed')) ?>).show();
+            });
         });
 
         $('#apply-credit-form, #refund-credit-form').on('submit', function(e) {
@@ -240,7 +388,7 @@ $typeChoices = [
         $(document).on('change', 'input[name="sale_ids[]"]', updateSelectedTotal);
         updateSelectedTotal();
 
-        AccountsViewLazy.init({
+        window.accountsViewApi = AccountsViewLazy.init({
             customerId: customerId,
             perPage: <?= (int) $per_page ?>,
             urls: {
@@ -319,10 +467,11 @@ $typeChoices = [
         <div class="panel panel-primary">
             <div class="panel-heading"><?= lang('Accounts.outstanding_receivables') ?></div>
             <div class="panel-body">
-                <h2><?= to_currency($outstanding_balance) ?></h2>
-                <p><?= lang('Accounts.number_outstanding_sales') ?>: <?= count($outstanding_sales_all) ?></p>
-                <p><?= lang('Accounts.number_open_invoices') ?>: <?= (int) $open_invoice_count ?></p>
-                <p><?= lang('Accounts.customer_credit') ?>: <strong><?= to_currency($customer_credit ?? 0) ?></strong></p>
+                <h2 id="account-outstanding-balance"><?= to_currency($outstanding_balance) ?></h2>
+                <p><?= lang('Accounts.number_outstanding_sales') ?>: <span id="account-outstanding-count"><?= count($outstanding_sales_all) ?></span></p>
+                <p><?= lang('Accounts.number_open_invoices') ?>: <span id="account-open-invoice-count"><?= (int) $open_invoice_count ?></span></p>
+                <p><?= lang('Accounts.open_invoice_balance') ?>: <strong id="account-open-invoice-balance"><?= to_currency($open_invoice_balance ?? 0) ?></strong></p>
+                <p><?= lang('Accounts.customer_credit') ?>: <strong id="account-customer-credit"><?= to_currency($customer_credit ?? 0) ?></strong></p>
             </div>
         </div>
     </div>
@@ -349,22 +498,45 @@ $typeChoices = [
                             <?= form_label(lang('Accounts.apply_to'), 'apply_to', ['class' => 'control-label col-xs-3']) ?>
                             <div class="col-xs-5">
                                 <?php
-                                $applyOptions = [
-                                    'sale'                  => lang('Accounts.apply_to_sale'),
-                                    'sales'                 => lang('Accounts.apply_to_multiple_sales'),
-                                    'consolidated_invoice'  => lang('Accounts.apply_to_consolidated_invoice'),
-                                ];
+                                $applyOptions = ['' => lang('Accounts.apply_to_select')];
+                                if ($hasPayableSales) {
+                                    $applyOptions['sale'] = lang('Accounts.apply_to_sale');
+                                    $applyOptions['sales'] = lang('Accounts.apply_to_multiple_sales');
+                                }
+                                if ($hasOpenInvoices) {
+                                    $applyOptions['consolidated_invoice'] = lang('Accounts.apply_to_consolidated_invoice');
+                                }
                                 ?>
-                                <?= form_dropdown('apply_to', $applyOptions, $defaultSaleId !== '' ? 'sale' : '', 'class="form-control input-sm" id="apply_to" required') ?>
+                                <?= form_dropdown(
+                                    'apply_to',
+                                    $applyOptions,
+                                    $defaultApplyTo,
+                                    'class="form-control input-sm" id="apply_to" required'
+                                ) ?>
+                                <?php if (!$hasPayableSales && $hasOpenInvoices): ?>
+                                    <p class="help-block" style="margin-bottom:0;">
+                                        <?= lang('Accounts.apply_to_ci_only_help') ?>
+                                    </p>
+                                <?php elseif ($hasPayableSales && !$hasOpenInvoices): ?>
+                                    <p class="help-block" style="margin-bottom:0;">
+                                        <?= lang('Accounts.apply_to_sales_only_help') ?>
+                                    </p>
+                                <?php elseif (!$hasPayableSales && !$hasOpenInvoices): ?>
+                                    <p class="help-block text-danger" style="margin-bottom:0;">
+                                        <?= lang('Accounts.no_payment_targets') ?>
+                                    </p>
+                                <?php endif; ?>
                             </div>
                         </div>
                         <div class="form-group form-group-sm apply-sale-group" style="display:none;">
                             <?= form_label(lang('Accounts.apply_to_sale'), 'sale_id', ['class' => 'control-label col-xs-3']) ?>
                             <div class="col-xs-5">
                                 <?php
-                                $saleOptions = ['' => ''];
+                                $saleOptions = ['' => lang('Accounts.apply_to_select_sale')];
                                 foreach ($payable_sales as $sale) {
-                                    $saleOptions[(int) $sale['sale_id']] = '#' . $sale['sale_id'] . ' — ' . to_currency($sale['outstanding']);
+                                    $saleOptions[(int) $sale['sale_id']] = '#' . $sale['sale_id']
+                                        . ' / ' . ($sale['invoice_number'] ?? '')
+                                        . ' — ' . to_currency($sale['outstanding']);
                                 }
                                 ?>
                                 <?= form_dropdown('sale_id', $saleOptions, $defaultSaleId, 'class="form-control input-sm" id="sale_id"') ?>
@@ -373,11 +545,18 @@ $typeChoices = [
                         <div class="form-group form-group-sm apply-sales-group" style="display:none;">
                             <?= form_label(lang('Accounts.apply_to_multiple_sales'), 'allocations', ['class' => 'control-label col-xs-3']) ?>
                             <div class="col-xs-8">
+                                <?php if (!$hasPayableSales): ?>
+                                    <p class="help-block"><?= lang('Accounts.no_outstanding_sales') ?></p>
+                                <?php endif; ?>
                                 <?php foreach ($payable_sales as $index => $sale): ?>
                                     <div class="row" style="margin-bottom:4px;">
                                         <div class="col-xs-6">
                                             <input type="hidden" name="allocations[<?= $index ?>][sale_id]" value="<?= (int) $sale['sale_id'] ?>">
-                                            Sale #<?= (int) $sale['sale_id'] ?> (<?= to_currency($sale['outstanding']) ?>)
+                                            Sale #<?= (int) $sale['sale_id'] ?>
+                                            <?php if (!empty($sale['invoice_number'])): ?>
+                                                / <?= esc($sale['invoice_number']) ?>
+                                            <?php endif; ?>
+                                            (<?= to_currency($sale['outstanding']) ?>)
                                         </div>
                                         <div class="col-xs-4">
                                             <input type="number" step="0.01" min="0" class="form-control input-sm"
@@ -392,13 +571,21 @@ $typeChoices = [
                             <?= form_label(lang('Accounts.apply_to_consolidated_invoice'), 'consolidated_invoice_id', ['class' => 'control-label col-xs-3']) ?>
                             <div class="col-xs-5">
                                 <?php
-                                $ciOptions = ['' => ''];
+                                $ciOptions = ['' => lang('Accounts.apply_to_select_ci')];
+                                $defaultCiId = count($openInvoices) === 1
+                                    ? (int) $openInvoices[0]['consolidated_invoice_id']
+                                    : '';
                                 foreach ($openInvoices as $invoice) {
                                     $ciOptions[(int) $invoice['consolidated_invoice_id']] =
                                         $invoice['invoice_number'] . ' — ' . to_currency($invoice['balance']);
                                 }
                                 ?>
-                                <?= form_dropdown('consolidated_invoice_id', $ciOptions, '', 'class="form-control input-sm" id="consolidated_invoice_id"') ?>
+                                <?= form_dropdown(
+                                    'consolidated_invoice_id',
+                                    $ciOptions,
+                                    $defaultCiId,
+                                    'class="form-control input-sm" id="consolidated_invoice_id"'
+                                ) ?>
                             </div>
                         </div>
                         <div class="form-group form-group-sm reference-group" style="display:none;">
@@ -774,12 +961,19 @@ $typeChoices = [
                     <p><?= lang('Accounts.selected_total') ?>: <strong id="reallocate-required-total">0</strong>
                         <small>(<?= lang('Accounts.change_allocation_must_match') ?>)</small>
                     </p>
-                    <input type="hidden" id="reallocate-payment-id" value="">
+                    <div id="reallocate-error" class="alert alert-danger" style="display:none;"></div>
+                    <input type="hidden" id="reallocate-payment-id" name="payment_id" value="">
+                    <input type="hidden" id="reallocate-customer-id" name="customer_id" value="">
                     <div id="reallocate-sales"></div>
+                    <div class="form-group" style="margin-top:12px;">
+                        <label for="reallocate-reason"><?= lang('Accounts.reallocate_reason') ?> <span class="text-danger">*</span></label>
+                        <textarea id="reallocate-reason" name="reallocate_reason" class="form-control" rows="3" required
+                                  placeholder="<?= esc(lang('Accounts.reallocate_reason_placeholder'), 'attr') ?>"></textarea>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal"><?= lang('Common.close') ?></button>
-                    <button type="submit" class="btn btn-primary"><?= lang('Accounts.change_allocation') ?></button>
+                    <button type="submit" class="btn btn-primary" id="reallocate-submit"><?= lang('Accounts.change_allocation') ?></button>
                 </div>
             </form>
         </div>
@@ -795,12 +989,46 @@ $typeChoices = [
             </div>
             <div class="modal-body">
                 <input type="hidden" id="void-payment-id" value="">
-                <p>Are you sure you want to void this payment?</p>
-                <p class="help-block">This will mark the payment as voided and remove its effect from the customer account.</p>
+                <div id="void-payment-loading" class="text-muted"><?= lang('Accounts.loading_records') ?></div>
+                <div id="void-payment-error" class="alert alert-danger" style="display:none;"></div>
+                <div id="void-payment-details" style="display:none;">
+                    <p><?= lang('Accounts.void_payment_confirm_body') ?></p>
+                    <p class="help-block"><?= lang('Accounts.void_payment_confirm_preserve') ?></p>
+                    <dl class="dl-horizontal">
+                        <dt><?= lang('Accounts.payment_number') ?></dt>
+                        <dd id="void-payment-number"></dd>
+                        <dt><?= lang('Accounts.payment_date') ?></dt>
+                        <dd id="void-payment-date"></dd>
+                        <dt><?= lang('Accounts.payment_method') ?></dt>
+                        <dd id="void-payment-method"></dd>
+                        <dt><?= lang('Accounts.payment_total_amount') ?></dt>
+                        <dd id="void-payment-amount"></dd>
+                    </dl>
+                    <div id="void-payment-invoice-row" style="display:none; margin-bottom: 10px;">
+                        <strong><?= lang('Accounts.void_associated_invoice') ?>:</strong>
+                        <span id="void-payment-invoice"></span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-condensed table-striped">
+                            <thead>
+                                <tr>
+                                    <th><?= lang('Accounts.void_allocations') ?></th>
+                                    <th class="text-right"><?= lang('Accounts.amount_paid') ?></th>
+                                </tr>
+                            </thead>
+                            <tbody id="void-payment-allocations"></tbody>
+                        </table>
+                    </div>
+                    <div class="form-group">
+                        <label for="void-payment-reason"><?= lang('Accounts.void_reason') ?> <span class="text-danger">*</span></label>
+                        <textarea id="void-payment-reason" class="form-control" rows="3" required
+                                  placeholder="<?= esc(lang('Accounts.void_reason_placeholder'), 'attr') ?>"></textarea>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-default" data-dismiss="modal"><?= lang('Common.cancel') ?></button>
-                <button type="button" class="btn btn-danger" id="confirm-void-payment"><?= lang('Accounts.void_payment') ?></button>
+                <button type="button" class="btn btn-danger" id="confirm-void-payment" disabled><?= lang('Accounts.confirm_void') ?></button>
             </div>
         </div>
     </div>

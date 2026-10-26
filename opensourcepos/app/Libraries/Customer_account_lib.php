@@ -483,16 +483,17 @@ class Customer_account_lib
             $change = $this->moneyRound($tendered - $saleTotal);
 
             $result[$saleId] = [
-                'sale_id'             => $saleId,
-                'sale_total'          => $this->moneyRound($saleTotal),
-                'payments_applied'    => $paymentsApplied,
-                'credits_returns'     => $creditsReturns,
-                'balance'             => $balance,
-                'status'              => $status,
-                'amount_tendered'     => $this->moneyRound($tendered),
-                'change'              => $change > 0 ? $change : 0.0,
-                'pos_payments'        => $posPayments,
-                'account_allocations' => $accountAlloc,
+                'sale_id'              => $saleId,
+                'sale_total'           => $this->moneyRound($saleTotal),
+                'payments_applied'     => $paymentsApplied,
+                'credits_returns'      => $creditsReturns,
+                'credit_applications'  => $creditApps,
+                'balance'              => $balance,
+                'status'               => $status,
+                'amount_tendered'      => $this->moneyRound($tendered),
+                'change'               => $change > 0 ? $change : 0.0,
+                'pos_payments'         => $posPayments,
+                'account_allocations'  => $accountAlloc,
             ];
         }
 
@@ -876,8 +877,20 @@ class Customer_account_lib
         }
     }
 
-    public function voidPayment(int $paymentId, int $employeeId, ?string $reason = null): void
+    /**
+     * Soft-voids a posted customer-account payment and all of its active allocations.
+     * Sales and consolidated invoices are never deleted; their balances are recalculated
+     * from remaining valid payments/credits via the existing financial summary rules.
+     *
+     * @throws RuntimeException when the payment cannot be voided
+     */
+    public function voidPayment(int $paymentId, int $employeeId, ?string $reason = null, ?int $expectedCustomerId = null): void
     {
+        $reason = trim((string) $reason);
+        if ($reason === '') {
+            throw new RuntimeException(lang('Accounts.error_void_reason_required'));
+        }
+
         $this->db->transStart();
 
         try {
@@ -889,13 +902,17 @@ class Customer_account_lib
             if ($payment === null) {
                 throw new RuntimeException(lang('Accounts.error_payment_not_found'));
             }
-            if ((int) $payment['status'] === CA_STATUS_VOIDED) {
-                if ($payment['consolidated_invoice_id'] !== null) {
-                    (new Consolidated_invoice_lib($this))->refreshStatus((int) $payment['consolidated_invoice_id']);
-                }
-                $this->db->transComplete();
 
-                return;
+            if ($expectedCustomerId !== null && (int) $payment['customer_id'] !== $expectedCustomerId) {
+                throw new RuntimeException(lang('Accounts.error_different_customer'));
+            }
+
+            if ((int) $payment['status'] === CA_STATUS_VOIDED) {
+                throw new RuntimeException(lang('Accounts.error_payment_already_voided'));
+            }
+
+            if ((int) $payment['status'] !== CA_STATUS_ACTIVE) {
+                throw new RuntimeException(lang('Accounts.error_payment_cannot_void'));
             }
 
             $allocs = $this->db->table('customer_payment_allocations')
@@ -913,26 +930,53 @@ class Customer_account_lib
                 ->where('status', CA_STATUS_ACTIVE)
                 ->update(['status' => CA_STATUS_VOIDED]);
 
+            $voidedAt = date('Y-m-d H:i:s');
             $this->db->table('customer_account_payments')
                 ->where('payment_id', $paymentId)
+                ->where('status', CA_STATUS_ACTIVE)
                 ->update([
                     'status'      => CA_STATUS_VOIDED,
-                    'voided_at'   => date('Y-m-d H:i:s'),
+                    'voided_at'   => $voidedAt,
                     'voided_by'   => $employeeId,
-                    'void_reason' => $reason,
+                    'void_reason' => mb_substr($reason, 0, 255),
                 ]);
 
+            // Concurrent void: another request already flipped status
+            if ($this->db->affectedRows() < 1) {
+                throw new RuntimeException(lang('Accounts.error_payment_already_voided'));
+            }
+
+            $allocationSummary = array_map(static fn (array $a): array => [
+                'sale_id' => (int) $a['sale_id'],
+                'amount'  => (float) $a['amount'],
+            ], $allocs);
+
             $this->writeAuditEvent((int) $payment['customer_id'], 'payment_voided', 'payment', $paymentId, [
-                'reason' => $reason,
+                'reason'                   => $reason,
+                'payment_amount'           => (float) $payment['payment_amount'],
+                'payment_type'             => (string) $payment['payment_type'],
+                'consolidated_invoice_id'  => $payment['consolidated_invoice_id'] !== null
+                    ? (int) $payment['consolidated_invoice_id']
+                    : null,
+                'allocations'              => $allocationSummary,
+                'voided_at'                => $voidedAt,
             ], $employeeId);
 
             if ($payment['consolidated_invoice_id'] !== null) {
                 (new Consolidated_invoice_lib($this))->refreshStatus((int) $payment['consolidated_invoice_id']);
             }
 
+            // Also refresh any CIs that own the affected sales (payment may not have been CI-scoped)
+            foreach (array_unique($saleIds) as $saleId) {
+                $ciId = $this->getActiveConsolidatedInvoiceId((int) $saleId);
+                if ($ciId !== null && (int) ($payment['consolidated_invoice_id'] ?? 0) !== $ciId) {
+                    (new Consolidated_invoice_lib($this))->refreshStatus($ciId);
+                }
+            }
+
             $this->db->transComplete();
             if ($this->db->transStatus() === false) {
-                throw new RuntimeException('Void payment failed.');
+                throw new RuntimeException(lang('Accounts.error_void_failed'));
             }
         } catch (\Throwable $e) {
             $this->db->transRollback();
@@ -941,10 +985,112 @@ class Customer_account_lib
     }
 
     /**
-     * @param list<array{sale_id:int, amount:float}> $allocations
+     * Payment details for the Void Payment confirmation dialog.
+     *
+     * @return array{
+     *   payment_id:int,
+     *   customer_id:int,
+     *   payment_type:string,
+     *   payment_amount:float,
+     *   payment_time:string,
+     *   reference_code:string,
+     *   comment:?string,
+     *   status:int,
+     *   voided:bool,
+     *   void_reason:?string,
+     *   voided_at:?string,
+     *   voided_by:?int,
+     *   consolidated_invoice_id:?int,
+     *   consolidated_invoice_number:?string,
+     *   allocations:list<array{sale_id:int, amount:float, invoice_number:?string}>
+     * }
      */
-    public function reallocatePayment(int $paymentId, array $allocations, int $employeeId): array
+    public function getPaymentVoidDetails(int $paymentId): array
     {
+        $payment = $this->db->table('customer_account_payments')
+            ->where('payment_id', $paymentId)
+            ->get()
+            ->getRowArray();
+
+        if ($payment === null) {
+            throw new RuntimeException(lang('Accounts.error_payment_not_found'));
+        }
+
+        $ciNumber = null;
+        $ciId = $payment['consolidated_invoice_id'] !== null
+            ? (int) $payment['consolidated_invoice_id']
+            : null;
+        if ($ciId !== null) {
+            $ci = $this->db->table('consolidated_invoices')
+                ->select('invoice_number')
+                ->where('consolidated_invoice_id', $ciId)
+                ->get()
+                ->getRowArray();
+            $ciNumber = $ci['invoice_number'] ?? null;
+        }
+
+        // Include active allocations for live payments; for already-voided show the voided set
+        $activeOnly = (int) $payment['status'] === CA_STATUS_ACTIVE;
+        $allocs = $this->getPaymentAllocations($paymentId, $activeOnly);
+        if ($allocs === [] && !$activeOnly) {
+            $allocs = $this->getPaymentAllocations($paymentId, false);
+        }
+
+        $allocationRows = [];
+        foreach ($allocs as $alloc) {
+            $sale = $this->db->table('sales')
+                ->select('invoice_number')
+                ->where('sale_id', (int) $alloc['sale_id'])
+                ->get()
+                ->getRowArray();
+            $amount = $this->moneyRound((float) $alloc['amount']);
+            $allocationRows[] = [
+                'sale_id'         => (int) $alloc['sale_id'],
+                'amount'          => $amount,
+                'amount_formatted'=> to_currency($amount),
+                'invoice_number'  => $sale['invoice_number'] ?? null,
+            ];
+        }
+
+        $paymentAmount = $this->moneyRound((float) $payment['payment_amount']);
+
+        return [
+            'payment_id'                  => (int) $payment['payment_id'],
+            'customer_id'                 => (int) $payment['customer_id'],
+            'payment_type'                => (string) $payment['payment_type'],
+            'payment_amount'              => $paymentAmount,
+            'payment_amount_formatted'    => to_currency($paymentAmount),
+            'payment_time'                => (string) $payment['payment_time'],
+            'payment_time_formatted'      => to_datetime(strtotime((string) $payment['payment_time'])),
+            'reference_code'              => (string) ($payment['reference_code'] ?? ''),
+            'comment'                     => $payment['comment'] ?? null,
+            'status'                      => (int) $payment['status'],
+            'voided'                      => (int) $payment['status'] === CA_STATUS_VOIDED,
+            'void_reason'                 => $payment['void_reason'] ?? null,
+            'voided_at'                   => $payment['voided_at'] ?? null,
+            'voided_by'                   => $payment['voided_by'] !== null ? (int) $payment['voided_by'] : null,
+            'consolidated_invoice_id'     => $ciId,
+            'consolidated_invoice_number' => $ciNumber,
+            'allocations'                 => $allocationRows,
+        ];
+    }
+
+    /**
+     * @param list<array{sale_id:int, amount:float}> $allocations
+     * @return array{payment_id:int, allocations:list<array{sale_id:int, amount:float}>}
+     */
+    public function reallocatePayment(
+        int $paymentId,
+        array $allocations,
+        int $employeeId,
+        ?string $reason = null,
+        ?int $expectedCustomerId = null
+    ): array {
+        $reason = trim((string) $reason);
+        if ($reason === '') {
+            throw new RuntimeException(lang('Accounts.error_reallocate_reason_required'));
+        }
+
         $this->db->transStart();
 
         try {
@@ -956,6 +1102,9 @@ class Customer_account_lib
             if ($payment === null) {
                 throw new RuntimeException(lang('Accounts.error_payment_not_found'));
             }
+            if ($expectedCustomerId !== null && (int) $payment['customer_id'] !== $expectedCustomerId) {
+                throw new RuntimeException(lang('Accounts.error_different_customer'));
+            }
             if ((int) $payment['status'] !== CA_STATUS_ACTIVE) {
                 throw new RuntimeException(lang('Accounts.error_payment_voided'));
             }
@@ -965,6 +1114,19 @@ class Customer_account_lib
             $consolidatedInvoiceId = $payment['consolidated_invoice_id'] !== null
                 ? (int) $payment['consolidated_invoice_id']
                 : null;
+
+            // Voided/cancelled CIs are grouping history only — reallocate as a free-standing payment.
+            if ($consolidatedInvoiceId !== null) {
+                $ci = $this->db->table('consolidated_invoices')
+                    ->where('consolidated_invoice_id', $consolidatedInvoiceId)
+                    ->get()
+                    ->getRowArray();
+                if ($ci === null || (int) $ci['status'] === CI_STATUS_CANCELLED) {
+                    $consolidatedInvoiceId = null;
+                }
+            }
+
+            $previousAllocations = $this->getPaymentAllocations($paymentId, true);
 
             $allocations = $this->mergeAllocationsBySaleId($allocations);
             if ($allocations === []) {
@@ -978,12 +1140,17 @@ class Customer_account_lib
                 ->update(['status' => CA_STATUS_VOIDED]);
 
             $saleIds = array_map(static fn (array $a): int => (int) $a['sale_id'], $allocations);
+            foreach ($previousAllocations as $prev) {
+                $saleIds[] = (int) $prev['sale_id'];
+            }
+            $saleIds = array_values(array_unique($saleIds));
             sort($saleIds);
             $this->lockSalesForUpdate($saleIds);
 
             $allocTotal = 0.0;
             $saved = [];
             $allocationModel = model(Customer_payment_allocation::class);
+            $affectedCiIds = [];
 
             foreach ($allocations as $allocation) {
                 $allocAmount = $this->moneyRound((float) $allocation['amount']);
@@ -1007,6 +1174,7 @@ class Customer_account_lib
                     if ($consolidatedInvoiceId === null || $activeCiId !== $consolidatedInvoiceId) {
                         throw new RuntimeException(lang('Accounts.error_sale_on_consolidated_invoice'));
                     }
+                    $affectedCiIds[] = $activeCiId;
                 } elseif ($consolidatedInvoiceId !== null) {
                     throw new RuntimeException(lang('Accounts.error_sale_not_on_invoice'));
                 }
@@ -1031,12 +1199,29 @@ class Customer_account_lib
             }
 
             $this->writeAuditEvent($customerId, 'payment_reallocated', 'payment', $paymentId, [
-                'allocations' => $saved,
+                'reason'               => $reason,
+                'previous_allocations' => $previousAllocations,
+                'allocations'          => $saved,
+                'payment_amount'       => $amount,
             ], $employeeId);
+
+            if ($payment['consolidated_invoice_id'] !== null) {
+                $affectedCiIds[] = (int) $payment['consolidated_invoice_id'];
+            }
+            foreach (array_unique($affectedCiIds) as $ciId) {
+                $ciRow = $this->db->table('consolidated_invoices')
+                    ->select('status')
+                    ->where('consolidated_invoice_id', $ciId)
+                    ->get()
+                    ->getRowArray();
+                if ($ciRow !== null && (int) $ciRow['status'] !== CI_STATUS_CANCELLED) {
+                    (new Consolidated_invoice_lib($this))->refreshStatus((int) $ciId);
+                }
+            }
 
             $this->db->transComplete();
             if ($this->db->transStatus() === false) {
-                throw new RuntimeException('Reallocate payment failed.');
+                throw new RuntimeException(lang('Accounts.error_reallocate_failed'));
             }
 
             return ['payment_id' => $paymentId, 'allocations' => $saved];
@@ -1044,6 +1229,25 @@ class Customer_account_lib
             $this->db->transRollback();
             throw $e;
         }
+    }
+
+    /**
+     * @param list<int> $saleIds
+     */
+    public function lockSalesForUpdatePublic(array $saleIds): void
+    {
+        $this->lockSalesForUpdate($saleIds);
+    }
+
+    public function recordAuditEvent(
+        int $customerId,
+        string $eventType,
+        string $entityType,
+        int $entityId,
+        array $payload,
+        int $employeeId
+    ): void {
+        $this->writeAuditEvent($customerId, $eventType, $entityType, $entityId, $payload, $employeeId);
     }
 
     /**
@@ -1584,6 +1788,12 @@ class Customer_account_lib
                 'amount'  => $amount,
             ], $employeeId);
 
+            // Keep consolidated invoice status/balance in sync when credit hits an attached sale.
+            $ciId = $this->getActiveConsolidatedInvoiceId($saleId);
+            if ($ciId !== null) {
+                (new Consolidated_invoice_lib($this))->refreshStatus($ciId);
+            }
+
             $this->db->transComplete();
             if ($this->db->transStatus() === false) {
                 throw new RuntimeException('Apply credit failed.');
@@ -1946,15 +2156,33 @@ class Customer_account_lib
             ->getResultArray();
         foreach ($accountPayments as $payment) {
             $voided = (int) $payment['status'] === CA_STATUS_VOIDED;
+            $paymentId = (int) $payment['payment_id'];
             $events[] = [
                 'date'      => $payment['payment_time'],
                 'type'      => 'payment',
-                'reference' => 'Payment #' . $payment['payment_id'] . ' / ' . $payment['payment_type']
+                'reference' => 'Payment #' . $paymentId . ' / ' . $payment['payment_type']
                     . ($voided ? ' [voided]' : ''),
                 'memo'      => to_currency((float) $payment['payment_amount']),
                 'status'    => (int) $payment['status'],
                 'voided'    => $voided,
             ];
+
+            if ($voided) {
+                $reason = trim((string) ($payment['void_reason'] ?? ''));
+                $events[] = [
+                    'date'      => $payment['voided_at'] ?: $payment['payment_time'],
+                    'type'      => 'payment_void',
+                    'reference' => 'Void Payment #' . $paymentId,
+                    'memo'      => ($reason !== ''
+                            ? lang('Accounts.memo_payment_voided', [$paymentId, $reason])
+                            : lang('Accounts.memo_payment_voided_no_reason', [$paymentId]))
+                        . ' — ' . to_currency((float) $payment['payment_amount']),
+                    'status'    => CA_STATUS_VOIDED,
+                    'voided'    => true,
+                    'voided_by' => $payment['voided_by'] !== null ? (int) $payment['voided_by'] : null,
+                    'void_reason' => $reason !== '' ? $reason : null,
+                ];
+            }
         }
 
         $creditApps = $this->db->table('customer_credit_applications')
@@ -1998,17 +2226,36 @@ class Customer_account_lib
 
         foreach ($invoices as $invoice) {
             $status = (int) $invoice['status'];
-            $memo = $status === CI_STATUS_CANCELLED
+            $cancelled = $status === CI_STATUS_CANCELLED;
+            $memo = $cancelled
                 ? lang('Accounts.memo_consolidated_invoice_cancelled')
                 : lang('Accounts.memo_consolidated_invoice');
             $events[] = [
                 'date'      => $invoice['invoice_date'],
                 'type'      => 'consolidated_invoice',
-                'reference' => $invoice['invoice_number'],
+                'reference' => $invoice['invoice_number'] . ($cancelled ? ' [voided]' : ''),
                 'memo'      => $memo,
                 'status'    => $status,
-                'voided'    => false,
+                'voided'    => $cancelled,
             ];
+
+            if ($cancelled) {
+                $reason = trim((string) ($invoice['void_reason'] ?? ''));
+                $events[] = [
+                    'date'        => $invoice['voided_at'] ?? $invoice['updated_at'] ?? $invoice['invoice_date'],
+                    'type'        => 'invoice_void',
+                    'reference'   => 'Void ' . $invoice['invoice_number'],
+                    'memo'        => $reason !== ''
+                        ? lang('Accounts.memo_invoice_voided', [$invoice['invoice_number'], $reason])
+                        : lang('Accounts.memo_invoice_voided_no_reason', [$invoice['invoice_number']]),
+                    'status'      => CI_STATUS_CANCELLED,
+                    'voided'      => true,
+                    'voided_by'   => isset($invoice['voided_by']) && $invoice['voided_by'] !== null
+                        ? (int) $invoice['voided_by']
+                        : null,
+                    'void_reason' => $reason !== '' ? $reason : null,
+                ];
+            }
         }
 
         usort($events, static function (array $a, array $b): int {
@@ -2330,9 +2577,11 @@ class Customer_account_lib
             }
         }
 
+        // Include active and voided payments so the audit trail stays complete.
+        // Voided payments keep their original credit entry and add a debit reversal.
         $accountPayments = $this->db->table('customer_account_payments')
             ->where('customer_id', $customerId)
-            ->where('status', CA_STATUS_ACTIVE)
+            ->whereIn('status', [CA_STATUS_ACTIVE, CA_STATUS_VOIDED])
             ->orderBy('payment_time', 'asc')
             ->orderBy('payment_id', 'asc')
             ->get()
@@ -2340,6 +2589,7 @@ class Customer_account_lib
 
         foreach ($accountPayments as $payment) {
             $paymentId = (int) $payment['payment_id'];
+            $isVoided = (int) $payment['status'] === CA_STATUS_VOIDED;
             $ref = 'Payment #' . $paymentId . ' / ' . $payment['payment_type'];
             if (!empty($payment['consolidated_invoice_id'])) {
                 $ci = $this->db->table('consolidated_invoices')
@@ -2351,9 +2601,12 @@ class Customer_account_lib
                     $ref .= ' / ' . $ci['invoice_number'];
                 }
             }
+            if ($isVoided) {
+                $ref .= ' [voided]';
+            }
 
             $allocParts = [];
-            foreach ($this->getPaymentAllocations($paymentId) as $alloc) {
+            foreach ($this->getPaymentAllocations($paymentId, !$isVoided) as $alloc) {
                 $allocParts[] = 'Sale #' . $alloc['sale_id'] . ' — ' . to_currency($alloc['amount']);
             }
 
@@ -2367,7 +2620,26 @@ class Customer_account_lib
                 'credit'       => (float) $payment['payment_amount'],
                 'allocated_to' => $allocParts !== [] ? implode('; ', $allocParts) : null,
                 'memo'         => $payment['comment'] ?? null,
+                'voided'       => $isVoided,
             ];
+
+            if ($isVoided) {
+                $voidTime = $payment['voided_at'] ?: $payment['payment_time'];
+                $reason = trim((string) ($payment['void_reason'] ?? ''));
+                $events[] = [
+                    'sort_time'   => $voidTime,
+                    'date'        => $voidTime,
+                    'type'        => 'payment_void',
+                    'transaction' => 'Void Payment',
+                    'reference'   => 'Void Payment #' . $paymentId,
+                    'debit'       => (float) $payment['payment_amount'],
+                    'credit'      => 0,
+                    'memo'        => $reason !== ''
+                        ? lang('Accounts.memo_payment_voided', [$paymentId, $reason])
+                        : lang('Accounts.memo_payment_voided_no_reason', [$paymentId]),
+                    'voided'      => true,
+                ];
+            }
         }
 
         $returnCredits = $this->db->table('customer_return_credits')
@@ -2565,10 +2837,7 @@ class Customer_account_lib
 
     private function countOpenConsolidatedInvoices(int $customerId): int
     {
-        return $this->db->table('consolidated_invoices')
-            ->where('customer_id', $customerId)
-            ->whereIn('status', [CI_STATUS_OPEN, CI_STATUS_PARTIALLY_PAID, CI_STATUS_DRAFT])
-            ->countAllResults();
+        return (new Consolidated_invoice_lib($this))->countOpenForCustomer($customerId);
     }
 
     /**
@@ -2612,7 +2881,7 @@ class Customer_account_lib
         $to = $this->sanitizeFilterDate($filters['to'] ?? null);
         $typeMap = [
             'sale'                  => ['sale'],
-            'payment'               => ['pos_payment', 'account_payment'],
+            'payment'               => ['pos_payment', 'account_payment', 'payment_void'],
             'return'                => ['return_credit'],
             'refund'                => ['return_cash', 'credit_refund'],
             'customer_credit'       => ['return_credit_issued'],
@@ -2669,7 +2938,7 @@ class Customer_account_lib
         $to = $this->sanitizeFilterDate($filters['to'] ?? null);
         $typeMap = [
             'sale'                 => ['sale'],
-            'payment'              => ['payment'],
+            'payment'              => ['payment', 'payment_void'],
             'return'               => ['return'],
             'refund'               => ['refund'],
             'consolidated_invoice' => ['consolidated_invoice'],

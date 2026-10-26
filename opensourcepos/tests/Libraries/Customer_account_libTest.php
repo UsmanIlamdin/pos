@@ -40,6 +40,7 @@ class Customer_account_libTest extends CIUnitTestCase
         parent::setUp();
 
         $this->ensureVoidReturnsSchema();
+        $this->ensureVoidInvoiceSchema();
 
         $ospos = new OSPOS();
         $ospos->settings = array_merge($ospos->settings ?? [], [
@@ -180,6 +181,82 @@ class Customer_account_libTest extends CIUnitTestCase
                 $forge->addColumn('inventory', [
                     'sale_id' => ['type' => 'INT', 'constraint' => 10, 'null' => true],
                 ]);
+            } catch (\Throwable $e) {
+                // already present
+            }
+        }
+
+        $applied = true;
+    }
+
+    /**
+     * Ensure consolidated-invoice void columns and non-unique sale_id index.
+     */
+    private function ensureVoidInvoiceSchema(): void
+    {
+        static $applied = false;
+        if ($applied) {
+            return;
+        }
+
+        $db = Database::connect();
+        $forge = \Config\Database::forge();
+
+        if ($db->tableExists('consolidated_invoices')) {
+            $fields = $db->getFieldNames('consolidated_invoices');
+            if (!in_array('voided_at', $fields, true)) {
+                try {
+                    $forge->addColumn('consolidated_invoices', [
+                        'voided_at' => ['type' => 'TIMESTAMP', 'null' => true],
+                    ]);
+                } catch (\Throwable $e) {
+                    // already present
+                }
+            }
+            if (!in_array('voided_by', $db->getFieldNames('consolidated_invoices'), true)) {
+                try {
+                    $forge->addColumn('consolidated_invoices', [
+                        'voided_by' => ['type' => 'INT', 'constraint' => 10, 'null' => true],
+                    ]);
+                } catch (\Throwable $e) {
+                    // already present
+                }
+            }
+            if (!in_array('void_reason', $db->getFieldNames('consolidated_invoices'), true)) {
+                try {
+                    $forge->addColumn('consolidated_invoices', [
+                        'void_reason' => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
+                    ]);
+                } catch (\Throwable $e) {
+                    // already present
+                }
+            }
+        }
+
+        if ($db->tableExists('consolidated_invoice_sales')) {
+            $table = $db->prefixTable('consolidated_invoice_sales');
+            $salesTable = $db->prefixTable('sales');
+            try {
+                $db->query('ALTER TABLE ' . $table . ' DROP FOREIGN KEY `ospos_consolidated_invoice_sales_ibfk_2`');
+            } catch (\Throwable $e) {
+                // FK name may differ / already dropped
+            }
+            try {
+                $db->query('ALTER TABLE ' . $table . ' DROP INDEX `sale_id`');
+            } catch (\Throwable $e) {
+                // index may already be non-unique or absent
+            }
+            try {
+                $db->query('ALTER TABLE ' . $table . ' ADD KEY `sale_id` (`sale_id`)');
+            } catch (\Throwable $e) {
+                // already present
+            }
+            try {
+                $db->query(
+                    'ALTER TABLE ' . $table
+                    . ' ADD CONSTRAINT `ospos_consolidated_invoice_sales_ibfk_2`'
+                    . ' FOREIGN KEY (`sale_id`) REFERENCES `' . $salesTable . '` (`sale_id`)'
+                );
             } catch (\Throwable $e) {
                 // already present
             }
@@ -758,7 +835,7 @@ class Customer_account_libTest extends CIUnitTestCase
 
         $this->accountLib->reallocatePayment($first['payment_id'], [
             ['sale_id' => $b['sale_id'], 'amount' => 300.0],
-        ], $a['employee_id']);
+        ], $a['employee_id'], 'wrong sale correction');
 
         $this->assertEqualsWithDelta(500.0, $this->accountLib->getSaleOutstanding($a['sale_id']), 0.01);
         $this->assertEqualsWithDelta(200.0, $this->accountLib->getSaleOutstanding($b['sale_id']), 0.01);
@@ -1510,5 +1587,658 @@ class Customer_account_libTest extends CIUnitTestCase
             'customer_id' => $customerId,
             'employee_id' => 1,
         ];
+    }
+
+    public function testVoidFullyPaidSingleSaleRestoresBalanceAndKeepsPaymentRow(): void
+    {
+        $fixture = $this->createSaleWithPayments(500.0, [
+            [lang('Sales.due'), 500.0],
+        ]);
+        $payment = $this->accountLib->recordPayment(
+            $fixture['customer_id'],
+            500.0,
+            lang('Sales.cash'),
+            $fixture['employee_id'],
+            null,
+            null,
+            null,
+            null,
+            [['sale_id' => $fixture['sale_id'], 'amount' => 500.0]]
+        );
+
+        $this->accountLib->voidPayment($payment['payment_id'], $fixture['employee_id'], 'void fully paid');
+
+        $summary = $this->accountLib->getSaleFinancialSummary($fixture['sale_id']);
+        $this->assertEqualsWithDelta(500.0, $summary['balance'], 0.01);
+        $this->assertSame(SALE_PAY_STATUS_UNPAID, $summary['status']);
+
+        $stored = $this->db->table('customer_account_payments')
+            ->where('payment_id', $payment['payment_id'])
+            ->get()
+            ->getRowArray();
+        $this->assertNotNull($stored);
+        $this->assertSame(CA_STATUS_VOIDED, (int) $stored['status']);
+        $this->assertSame('void fully paid', $stored['void_reason']);
+        $this->assertNotEmpty($stored['voided_at']);
+    }
+
+    public function testVoidPartialPaymentAmongMultipleKeepsOtherAllocation(): void
+    {
+        $fixture = $this->createSaleWithPayments(1000.0, [
+            [lang('Sales.due'), 1000.0],
+        ]);
+        $keep = $this->accountLib->recordPayment(
+            $fixture['customer_id'],
+            400.0,
+            lang('Sales.cash'),
+            $fixture['employee_id'],
+            null,
+            null,
+            null,
+            null,
+            [['sale_id' => $fixture['sale_id'], 'amount' => 400.0]]
+        );
+        $voided = $this->accountLib->recordPayment(
+            $fixture['customer_id'],
+            600.0,
+            lang('Sales.cash'),
+            $fixture['employee_id'],
+            null,
+            null,
+            null,
+            null,
+            [['sale_id' => $fixture['sale_id'], 'amount' => 600.0]]
+        );
+
+        $this->accountLib->voidPayment($voided['payment_id'], $fixture['employee_id'], 'void 600');
+
+        $summary = $this->accountLib->getSaleFinancialSummary($fixture['sale_id']);
+        $this->assertEqualsWithDelta(600.0, $summary['balance'], 0.01);
+        $this->assertEqualsWithDelta(400.0, $summary['payments_applied'], 0.01);
+        $this->assertSame(SALE_PAY_STATUS_PARTIAL, $summary['status']);
+
+        $keepRow = $this->db->table('customer_account_payments')
+            ->where('payment_id', $keep['payment_id'])
+            ->get()
+            ->getRowArray();
+        $this->assertSame(CA_STATUS_ACTIVE, (int) $keepRow['status']);
+    }
+
+    public function testVoidPaymentAllocatedAcrossMultipleSales(): void
+    {
+        $a = $this->createSaleWithPayments(300.0, [[lang('Sales.due'), 300.0]]);
+        $b = $this->createSaleWithPayments(200.0, [[lang('Sales.due'), 200.0]], $a['customer_id']);
+
+        $payment = $this->accountLib->recordPayment(
+            $a['customer_id'],
+            500.0,
+            lang('Sales.cash'),
+            $a['employee_id'],
+            null,
+            null,
+            null,
+            null,
+            [
+                ['sale_id' => $a['sale_id'], 'amount' => 300.0],
+                ['sale_id' => $b['sale_id'], 'amount' => 200.0],
+            ]
+        );
+
+        $this->accountLib->voidPayment($payment['payment_id'], $a['employee_id'], 'split void');
+
+        $this->assertEqualsWithDelta(300.0, $this->accountLib->getSaleOutstanding($a['sale_id']), 0.01);
+        $this->assertEqualsWithDelta(200.0, $this->accountLib->getSaleOutstanding($b['sale_id']), 0.01);
+
+        $activeAllocs = $this->db->table('customer_payment_allocations')
+            ->where('customer_account_payment_id', $payment['payment_id'])
+            ->where('status', CA_STATUS_ACTIVE)
+            ->countAllResults();
+        $this->assertSame(0, $activeAllocs);
+    }
+
+    public function testVoidOneOfMultipleInvoicePaymentsLeavesOthersApplied(): void
+    {
+        $a = $this->createSaleWithPayments(400.0, [[lang('Sales.due'), 400.0]]);
+        $b = $this->createSaleWithPayments(600.0, [[lang('Sales.due'), 600.0]], $a['customer_id']);
+        $ci = $this->invoiceLib->create($a['customer_id'], [$a['sale_id'], $b['sale_id']], $a['employee_id']);
+
+        $first = $this->invoiceLib->pay($ci['consolidated_invoice_id'], 400.0, lang('Sales.cash'), $a['employee_id']);
+        $this->invoiceLib->pay($ci['consolidated_invoice_id'], 200.0, lang('Sales.cash'), $a['employee_id']);
+
+        $before = $this->invoiceLib->getInvoiceDetails($ci['consolidated_invoice_id']);
+        $invoiceTotalBefore = (float) $before['summary']['net_invoice_amount'];
+        $this->accountLib->voidPayment($first['payment_id'], $a['employee_id'], 'void first CI payment');
+
+        $details = $this->invoiceLib->getInvoiceDetails($ci['consolidated_invoice_id']);
+        $this->assertEqualsWithDelta($invoiceTotalBefore, (float) $details['summary']['net_invoice_amount'], 0.01);
+        $this->assertEqualsWithDelta(200.0, $this->invoiceLib->getPaidAmount($ci['consolidated_invoice_id']), 0.01);
+        $this->assertEqualsWithDelta(800.0, $this->invoiceLib->getBalance($ci['consolidated_invoice_id']), 0.01);
+        $this->assertSame(CI_STATUS_PARTIALLY_PAID, (int) $details['invoice']['status']);
+    }
+
+    public function testVoidPaymentDoesNotChangeUnrelatedCustomerCredit(): void
+    {
+        $fixture = $this->createSaleWithPayments(100.0, [[lang('Sales.due'), 100.0]]);
+        $beforeCredit = $this->accountLib->getCustomerCreditBalance($fixture['customer_id']);
+
+        $payment = $this->accountLib->recordPayment(
+            $fixture['customer_id'],
+            100.0,
+            lang('Sales.cash'),
+            $fixture['employee_id'],
+            null,
+            null,
+            null,
+            null,
+            [['sale_id' => $fixture['sale_id'], 'amount' => 100.0]]
+        );
+        $this->accountLib->voidPayment($payment['payment_id'], $fixture['employee_id'], 'credit untouched');
+
+        $afterCredit = $this->accountLib->getCustomerCreditBalance($fixture['customer_id']);
+        $this->assertEqualsWithDelta($beforeCredit, $afterCredit, 0.01);
+    }
+
+    public function testDoubleVoidIsRejectedWithoutDuplicateReversal(): void
+    {
+        $fixture = $this->createSaleWithPayments(100.0, [[lang('Sales.due'), 100.0]]);
+        $payment = $this->accountLib->recordPayment(
+            $fixture['customer_id'],
+            100.0,
+            lang('Sales.cash'),
+            $fixture['employee_id'],
+            null,
+            null,
+            null,
+            null,
+            [['sale_id' => $fixture['sale_id'], 'amount' => 100.0]]
+        );
+
+        $this->accountLib->voidPayment($payment['payment_id'], $fixture['employee_id'], 'first void');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(lang('Accounts.error_payment_already_voided'));
+        $this->accountLib->voidPayment($payment['payment_id'], $fixture['employee_id'], 'second void');
+    }
+
+    public function testVoidRequiresReasonAndRejectsCrossCustomer(): void
+    {
+        $owner = $this->createSaleWithPayments(100.0, [[lang('Sales.due'), 100.0]]);
+        $other = $this->createSaleWithPayments(100.0, [[lang('Sales.due'), 100.0]]);
+        $payment = $this->accountLib->recordPayment(
+            $owner['customer_id'],
+            100.0,
+            lang('Sales.cash'),
+            $owner['employee_id'],
+            null,
+            null,
+            null,
+            null,
+            [['sale_id' => $owner['sale_id'], 'amount' => 100.0]]
+        );
+
+        try {
+            $this->accountLib->voidPayment($payment['payment_id'], $owner['employee_id'], '   ');
+            $this->fail('Expected void reason required');
+        } catch (RuntimeException $e) {
+            $this->assertSame(lang('Accounts.error_void_reason_required'), $e->getMessage());
+        }
+
+        try {
+            $this->accountLib->voidPayment(
+                $payment['payment_id'],
+                $owner['employee_id'],
+                'wrong customer',
+                $other['customer_id']
+            );
+            $this->fail('Expected cross-customer rejection');
+        } catch (RuntimeException $e) {
+            $this->assertSame(lang('Accounts.error_different_customer'), $e->getMessage());
+        }
+
+        $stored = $this->db->table('customer_account_payments')
+            ->where('payment_id', $payment['payment_id'])
+            ->get()
+            ->getRowArray();
+        $this->assertSame(CA_STATUS_ACTIVE, (int) $stored['status']);
+    }
+
+    public function testVoidAppearsInTransactionsAndActivityAsReversal(): void
+    {
+        $fixture = $this->createSaleWithPayments(150.0, [[lang('Sales.due'), 150.0]]);
+        $payment = $this->accountLib->recordPayment(
+            $fixture['customer_id'],
+            150.0,
+            lang('Sales.cash'),
+            $fixture['employee_id'],
+            null,
+            null,
+            null,
+            null,
+            [['sale_id' => $fixture['sale_id'], 'amount' => 150.0]]
+        );
+
+        $this->accountLib->voidPayment($payment['payment_id'], $fixture['employee_id'], 'audit reason');
+
+        $tx = $this->accountLib->getFinancialTransactions($fixture['customer_id'], 1, 100);
+        $voidRows = array_values(array_filter(
+            $tx['rows'],
+            static fn (array $row): bool => ($row['type'] ?? '') === 'payment_void'
+                && str_contains((string) ($row['reference'] ?? ''), 'Void Payment #' . $payment['payment_id'])
+        ));
+        $this->assertCount(1, $voidRows);
+        $this->assertEqualsWithDelta(150.0, (float) $voidRows[0]['debit'], 0.01);
+
+        $activity = $this->accountLib->getAccountActivity($fixture['customer_id'], 1, 100);
+        $activityVoids = array_values(array_filter(
+            $activity['rows'],
+            static fn (array $row): bool => ($row['type'] ?? '') === 'payment_void'
+        ));
+        $this->assertNotEmpty($activityVoids);
+        $this->assertStringContainsString('audit reason', (string) $activityVoids[0]['memo']);
+
+        $details = $this->accountLib->getPaymentVoidDetails($payment['payment_id']);
+        $this->assertTrue($details['voided']);
+        $this->assertSame('audit reason', $details['void_reason']);
+    }
+
+    public function testVoidUnpaidConsolidatedInvoiceFreesSalesKeepsReceivables(): void
+    {
+        $fixture = $this->createSaleWithPayments(1000.0, [[lang('Sales.due'), 1000.0]]);
+        $ci = $this->invoiceLib->create(
+            $fixture['customer_id'],
+            [$fixture['sale_id']],
+            $fixture['employee_id']
+        );
+
+        $before = $this->accountLib->getCustomerOutstanding($fixture['customer_id']);
+        $result = $this->invoiceLib->voidInvoice(
+            $ci['consolidated_invoice_id'],
+            $fixture['employee_id'],
+            'void unpaid'
+        );
+
+        $invoice = $this->db->table('consolidated_invoices')
+            ->where('consolidated_invoice_id', $ci['consolidated_invoice_id'])
+            ->get()
+            ->getRowArray();
+        $this->assertSame(CI_STATUS_CANCELLED, (int) $invoice['status']);
+        $this->assertSame('void unpaid', $invoice['void_reason']);
+        $this->assertFalse($this->accountLib->isSaleOnActiveConsolidatedInvoice($fixture['sale_id']));
+        $this->assertEqualsWithDelta($before, $this->accountLib->getCustomerOutstanding($fixture['customer_id']), 0.01);
+        $this->assertEqualsWithDelta(1000.0, $this->accountLib->getSaleOutstanding($fixture['sale_id']), 0.01);
+        // Voided CI must not keep a document balance (sales remain in customer AR only).
+        $this->assertEqualsWithDelta(0.0, $this->invoiceLib->getBalance($ci['consolidated_invoice_id']), 0.01);
+        $this->assertEqualsWithDelta(0.0, $result['active_payment_total'], 0.01);
+        $this->assertEqualsWithDelta(1000.0, $result['customer_outstanding_after'], 0.01);
+        $this->assertNotEmpty($this->accountLib->getOutstandingSales($fixture['customer_id'], true));
+
+        // Historical sale links preserved
+        $linkCount = $this->db->table('consolidated_invoice_sales')
+            ->where('consolidated_invoice_id', $ci['consolidated_invoice_id'])
+            ->countAllResults();
+        $this->assertSame(1, $linkCount);
+
+        $replacement = $this->invoiceLib->create(
+            $fixture['customer_id'],
+            [$fixture['sale_id']],
+            $fixture['employee_id']
+        );
+        $this->assertNotSame($ci['consolidated_invoice_id'], $replacement['consolidated_invoice_id']);
+        $this->assertEqualsWithDelta(
+            1000.0,
+            $this->accountLib->getCustomerOutstanding($fixture['customer_id']),
+            0.01
+        );
+    }
+
+    public function testVoidPartiallyPaidConsolidatedInvoiceKeepsPaymentsAndBalances(): void
+    {
+        $fixture = $this->createSaleWithPayments(1000.0, [[lang('Sales.due'), 1000.0]]);
+        $ci = $this->invoiceLib->create(
+            $fixture['customer_id'],
+            [$fixture['sale_id']],
+            $fixture['employee_id']
+        );
+        $payment = $this->invoiceLib->pay(
+            $ci['consolidated_invoice_id'],
+            400.0,
+            lang('Sales.cash'),
+            $fixture['employee_id']
+        );
+
+        $beforeOutstanding = $this->accountLib->getCustomerOutstanding($fixture['customer_id']);
+        $this->invoiceLib->voidInvoice(
+            $ci['consolidated_invoice_id'],
+            $fixture['employee_id'],
+            'void partial'
+        );
+
+        $storedPayment = $this->db->table('customer_account_payments')
+            ->where('payment_id', $payment['payment_id'])
+            ->get()
+            ->getRowArray();
+        $this->assertSame(CA_STATUS_ACTIVE, (int) $storedPayment['status']);
+        $this->assertEqualsWithDelta(400.0, (float) $storedPayment['payment_amount'], 0.01);
+        $this->assertEqualsWithDelta(600.0, $this->accountLib->getSaleOutstanding($fixture['sale_id']), 0.01);
+        $this->assertEqualsWithDelta(
+            $beforeOutstanding,
+            $this->accountLib->getCustomerOutstanding($fixture['customer_id']),
+            0.01
+        );
+
+        $activeAllocs = $this->accountLib->getPaymentAllocations($payment['payment_id']);
+        $this->assertCount(1, $activeAllocs);
+        $this->assertSame($fixture['sale_id'], $activeAllocs[0]['sale_id']);
+    }
+
+    public function testVoidFullyPaidConsolidatedInvoiceKeepsSalesSettled(): void
+    {
+        $fixture = $this->createSaleWithPayments(1000.0, [[lang('Sales.due'), 1000.0]]);
+        $ci = $this->invoiceLib->create(
+            $fixture['customer_id'],
+            [$fixture['sale_id']],
+            $fixture['employee_id']
+        );
+        $this->invoiceLib->pay(
+            $ci['consolidated_invoice_id'],
+            1000.0,
+            lang('Sales.cash'),
+            $fixture['employee_id']
+        );
+
+        $before = $this->accountLib->getCustomerOutstanding($fixture['customer_id']);
+        $result = $this->invoiceLib->voidInvoice(
+            $ci['consolidated_invoice_id'],
+            $fixture['employee_id'],
+            'void paid'
+        );
+
+        $this->assertTrue($result['payments_preserved']);
+        $this->assertEqualsWithDelta(1000.0, $result['active_payment_total'], 0.01);
+        $this->assertEqualsWithDelta($before, $result['customer_outstanding_after'], 0.01);
+        $this->assertEqualsWithDelta(0.0, $this->accountLib->getSaleOutstanding($fixture['sale_id']), 0.01);
+        $this->assertEqualsWithDelta(0.0, $this->accountLib->getCustomerOutstanding($fixture['customer_id']), 0.01);
+        $this->assertCount(0, $this->accountLib->getOutstandingSales($fixture['customer_id'], true));
+
+        $invoice = $this->db->table('consolidated_invoices')
+            ->where('consolidated_invoice_id', $ci['consolidated_invoice_id'])
+            ->get()
+            ->getRowArray();
+        $this->assertSame(CI_STATUS_CANCELLED, (int) $invoice['status']);
+        $this->assertEqualsWithDelta(1000.0, $this->invoiceLib->getPaidAmount($ci['consolidated_invoice_id']), 0.01);
+        $this->assertEqualsWithDelta(0.0, $this->invoiceLib->getBalance($ci['consolidated_invoice_id']), 0.01);
+
+        $details = $this->invoiceLib->getInvoiceVoidDetails($ci['consolidated_invoice_id']);
+        $this->assertEqualsWithDelta(1000.0, $details['total_paid'], 0.01);
+        $this->assertEqualsWithDelta(0.0, $details['balance'], 0.01);
+        $this->assertTrue($details['payments_will_remain_active']);
+        $this->assertEqualsWithDelta(0.0, $details['receivables_after_void'], 0.01);
+    }
+
+    public function testConsolidatedInvoiceBalanceTracksReturnsAndMatchesCustomerAr(): void
+    {
+        $fixture = $this->createSaleWithPayments(250.0, [[lang('Sales.due'), 250.0]]);
+        $ci = $this->invoiceLib->create(
+            $fixture['customer_id'],
+            [$fixture['sale_id']],
+            $fixture['employee_id']
+        );
+        $this->invoiceLib->pay(
+            $ci['consolidated_invoice_id'],
+            150.0,
+            lang('Sales.cash'),
+            $fixture['employee_id']
+        );
+        $this->assertEqualsWithDelta(100.0, $this->invoiceLib->getBalance($ci['consolidated_invoice_id']), 0.01);
+
+        $return = $this->createReturnSale(100.0, $fixture['customer_id'], $fixture['sale_id']);
+        $this->accountLib->onReturnSaleCompleted($return['sale_id'], $fixture['employee_id'], 'settle remainder');
+
+        $this->assertEqualsWithDelta(0.0, $this->accountLib->getSaleOutstanding($fixture['sale_id']), 0.01);
+        $this->assertEqualsWithDelta(0.0, $this->invoiceLib->getBalance($ci['consolidated_invoice_id']), 0.01);
+        $this->assertSame(CI_STATUS_PAID, (int) $this->invoiceLib->refreshStatus($ci['consolidated_invoice_id']));
+        $this->assertSame(0, $this->invoiceLib->countOpenForCustomer($fixture['customer_id']));
+        $this->assertEqualsWithDelta(0.0, $this->invoiceLib->getOpenBalanceTotalForCustomer($fixture['customer_id']), 0.01);
+        $this->assertEqualsWithDelta(0.0, $this->accountLib->getCustomerOutstanding($fixture['customer_id']), 0.01);
+    }
+
+    public function testVoidInvoiceRejectsDuplicateAndCrossCustomer(): void
+    {
+        $owner = $this->createSaleWithPayments(100.0, [[lang('Sales.due'), 100.0]]);
+        $other = $this->createSaleWithPayments(100.0, [[lang('Sales.due'), 100.0]]);
+        $ci = $this->invoiceLib->create($owner['customer_id'], [$owner['sale_id']], $owner['employee_id']);
+
+        $this->invoiceLib->voidInvoice($ci['consolidated_invoice_id'], $owner['employee_id'], 'first');
+
+        try {
+            $this->invoiceLib->voidInvoice($ci['consolidated_invoice_id'], $owner['employee_id'], 'second');
+            $this->fail('Expected duplicate void rejection');
+        } catch (RuntimeException $e) {
+            $this->assertSame(lang('Accounts.error_invoice_already_voided'), $e->getMessage());
+        }
+
+        $ci2 = $this->invoiceLib->create($owner['customer_id'], [$owner['sale_id']], $owner['employee_id']);
+        try {
+            $this->invoiceLib->voidInvoice(
+                $ci2['consolidated_invoice_id'],
+                $owner['employee_id'],
+                'wrong customer',
+                $other['customer_id']
+            );
+            $this->fail('Expected cross-customer rejection');
+        } catch (RuntimeException $e) {
+            $this->assertSame(lang('Accounts.error_different_customer'), $e->getMessage());
+        }
+    }
+
+    public function testVoidInvoiceAppearsInActivityHistory(): void
+    {
+        $fixture = $this->createSaleWithPayments(200.0, [[lang('Sales.due'), 200.0]]);
+        $ci = $this->invoiceLib->create(
+            $fixture['customer_id'],
+            [$fixture['sale_id']],
+            $fixture['employee_id']
+        );
+        $this->invoiceLib->voidInvoice($ci['consolidated_invoice_id'], $fixture['employee_id'], 'history reason');
+
+        $activity = $this->accountLib->getAccountActivity($fixture['customer_id'], 1, 100);
+        $voidRows = array_values(array_filter(
+            $activity['rows'],
+            static fn (array $row): bool => ($row['type'] ?? '') === 'invoice_void'
+        ));
+        $this->assertNotEmpty($voidRows);
+        $this->assertStringContainsString('history reason', (string) $voidRows[0]['memo']);
+
+        $details = $this->invoiceLib->getInvoiceVoidDetails($ci['consolidated_invoice_id']);
+        $this->assertTrue($details['voided']);
+        $this->assertSame('history reason', $details['void_reason']);
+    }
+
+    public function testReplacementInvoiceDoesNotDuplicateReceivablesOrActiveCoverage(): void
+    {
+        $a = $this->createSaleWithPayments(300.0, [[lang('Sales.due'), 300.0]]);
+        $b = $this->createSaleWithPayments(700.0, [[lang('Sales.due'), 700.0]], $a['customer_id']);
+        $ci = $this->invoiceLib->create(
+            $a['customer_id'],
+            [$a['sale_id'], $b['sale_id']],
+            $a['employee_id']
+        );
+        $this->invoiceLib->pay($ci['consolidated_invoice_id'], 300.0, lang('Sales.cash'), $a['employee_id']);
+        $this->invoiceLib->voidInvoice($ci['consolidated_invoice_id'], $a['employee_id'], 'replace me');
+
+        $this->assertEqualsWithDelta(700.0, $this->accountLib->getCustomerOutstanding($a['customer_id']), 0.01);
+
+        // Settled sale cannot be re-consolidated; outstanding sale can.
+        $this->expectException(RuntimeException::class);
+        $this->invoiceLib->create($a['customer_id'], [$a['sale_id']], $a['employee_id']);
+    }
+
+    public function testReplacementInvoiceForOutstandingSaleAfterVoid(): void
+    {
+        $fixture = $this->createSaleWithPayments(1000.0, [[lang('Sales.due'), 1000.0]]);
+        $ci = $this->invoiceLib->create(
+            $fixture['customer_id'],
+            [$fixture['sale_id']],
+            $fixture['employee_id']
+        );
+        $this->invoiceLib->pay($ci['consolidated_invoice_id'], 400.0, lang('Sales.cash'), $fixture['employee_id']);
+        $this->invoiceLib->voidInvoice($ci['consolidated_invoice_id'], $fixture['employee_id'], 'replace partial');
+
+        $replacement = $this->invoiceLib->create(
+            $fixture['customer_id'],
+            [$fixture['sale_id']],
+            $fixture['employee_id']
+        );
+        $this->assertEqualsWithDelta(600.0, (float) $replacement['total_amount'], 0.01);
+        $this->assertEqualsWithDelta(600.0, $this->accountLib->getCustomerOutstanding($fixture['customer_id']), 0.01);
+        $this->assertTrue($this->accountLib->isSaleOnActiveConsolidatedInvoice($fixture['sale_id']));
+
+        // Duplicate active coverage rejected
+        $this->expectException(RuntimeException::class);
+        $this->invoiceLib->create(
+            $fixture['customer_id'],
+            [$fixture['sale_id']],
+            $fixture['employee_id']
+        );
+    }
+
+    public function testReallocateAcrossMultipleSalesPreservesPaymentAndHistory(): void
+    {
+        $a = $this->createSaleWithPayments(200.0, [[lang('Sales.due'), 200.0]]);
+        $b = $this->createSaleWithPayments(200.0, [[lang('Sales.due'), 200.0]], $a['customer_id']);
+        $c = $this->createSaleWithPayments(200.0, [[lang('Sales.due'), 200.0]], $a['customer_id']);
+
+        $payment = $this->accountLib->recordPayment(
+            $a['customer_id'],
+            300.0,
+            lang('Sales.cash'),
+            $a['employee_id'],
+            null,
+            null,
+            null,
+            null,
+            [
+                ['sale_id' => $a['sale_id'], 'amount' => 200.0],
+                ['sale_id' => $b['sale_id'], 'amount' => 100.0],
+            ]
+        );
+
+        $this->accountLib->reallocatePayment(
+            $payment['payment_id'],
+            [
+                ['sale_id' => $b['sale_id'], 'amount' => 150.0],
+                ['sale_id' => $c['sale_id'], 'amount' => 150.0],
+            ],
+            $a['employee_id'],
+            'split correction'
+        );
+
+        $paymentCount = $this->db->table('customer_account_payments')
+            ->where('payment_id', $payment['payment_id'])
+            ->countAllResults();
+        $this->assertSame(1, $paymentCount);
+
+        $this->assertEqualsWithDelta(200.0, $this->accountLib->getSaleOutstanding($a['sale_id']), 0.01);
+        $this->assertEqualsWithDelta(50.0, $this->accountLib->getSaleOutstanding($b['sale_id']), 0.01);
+        $this->assertEqualsWithDelta(50.0, $this->accountLib->getSaleOutstanding($c['sale_id']), 0.01);
+
+        $voidedAllocs = $this->db->table('customer_payment_allocations')
+            ->where('customer_account_payment_id', $payment['payment_id'])
+            ->where('status', CA_STATUS_VOIDED)
+            ->countAllResults();
+        $this->assertGreaterThanOrEqual(2, $voidedAllocs);
+
+        $audit = $this->db->table('customer_account_audit_events')
+            ->where('event_type', 'payment_reallocated')
+            ->where('entity_id', $payment['payment_id'])
+            ->orderBy('event_id', 'desc')
+            ->get()
+            ->getRowArray();
+        $this->assertNotNull($audit);
+        $payload = json_decode((string) $audit['payload'], true);
+        $this->assertSame('split correction', $payload['reason'] ?? null);
+        $this->assertNotEmpty($payload['previous_allocations'] ?? []);
+    }
+
+    public function testReallocateRejectsInvalidTotalsAndIneligibleSale(): void
+    {
+        $a = $this->createSaleWithPayments(100.0, [[lang('Sales.due'), 100.0]]);
+        $b = $this->createSaleWithPayments(100.0, [[lang('Sales.due'), 100.0]], $a['customer_id']);
+        $other = $this->createSaleWithPayments(100.0, [[lang('Sales.due'), 100.0]]);
+
+        $payment = $this->accountLib->recordPayment(
+            $a['customer_id'],
+            50.0,
+            lang('Sales.cash'),
+            $a['employee_id'],
+            null,
+            null,
+            null,
+            null,
+            [['sale_id' => $a['sale_id'], 'amount' => 50.0]]
+        );
+
+        try {
+            $this->accountLib->reallocatePayment(
+                $payment['payment_id'],
+                [['sale_id' => $b['sale_id'], 'amount' => 40.0]],
+                $a['employee_id'],
+                'under allocate'
+            );
+            $this->fail('Expected invalid total rejection');
+        } catch (RuntimeException $e) {
+            $this->assertSame(lang('Accounts.cannot_overpay'), $e->getMessage());
+        }
+
+        try {
+            $this->accountLib->reallocatePayment(
+                $payment['payment_id'],
+                [['sale_id' => $other['sale_id'], 'amount' => 50.0]],
+                $a['employee_id'],
+                'cross customer'
+            );
+            $this->fail('Expected ineligible sale rejection');
+        } catch (RuntimeException $e) {
+            $this->assertSame(lang('Accounts.error_different_customer'), $e->getMessage());
+        }
+
+        try {
+            $this->accountLib->reallocatePayment(
+                $payment['payment_id'],
+                [['sale_id' => $b['sale_id'], 'amount' => 50.0]],
+                $a['employee_id'],
+                '   '
+            );
+            $this->fail('Expected reason required');
+        } catch (RuntimeException $e) {
+            $this->assertSame(lang('Accounts.error_reallocate_reason_required'), $e->getMessage());
+        }
+
+        $stored = $this->db->table('customer_account_payments')
+            ->where('payment_id', $payment['payment_id'])
+            ->get()
+            ->getRowArray();
+        $this->assertSame(CA_STATUS_ACTIVE, (int) $stored['status']);
+        $this->assertEqualsWithDelta(50.0, $this->accountLib->getSaleOutstanding($a['sale_id']), 0.01);
+    }
+
+    public function testReallocateAfterVoidedInvoiceAllowsOutstandingSales(): void
+    {
+        $a = $this->createSaleWithPayments(300.0, [[lang('Sales.due'), 300.0]]);
+        $b = $this->createSaleWithPayments(300.0, [[lang('Sales.due'), 300.0]], $a['customer_id']);
+        $ci = $this->invoiceLib->create($a['customer_id'], [$a['sale_id']], $a['employee_id']);
+        $payment = $this->invoiceLib->pay($ci['consolidated_invoice_id'], 300.0, lang('Sales.cash'), $a['employee_id']);
+        $this->invoiceLib->voidInvoice($ci['consolidated_invoice_id'], $a['employee_id'], 'free for realloc');
+
+        $this->accountLib->reallocatePayment(
+            $payment['payment_id'],
+            [['sale_id' => $b['sale_id'], 'amount' => 300.0]],
+            $a['employee_id'],
+            'move after ci void'
+        );
+
+        $this->assertEqualsWithDelta(300.0, $this->accountLib->getSaleOutstanding($a['sale_id']), 0.01);
+        $this->assertEqualsWithDelta(0.0, $this->accountLib->getSaleOutstanding($b['sale_id']), 0.01);
+        $this->assertEqualsWithDelta(300.0, $this->accountLib->getCustomerOutstanding($a['customer_id']), 0.01);
     }
 }

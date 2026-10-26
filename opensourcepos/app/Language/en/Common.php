@@ -91,4 +91,5 @@ return [
     "you_are_using_ospos"            => "",
     "zip"                            => "Postal Code",
     "none"                           => "Walk In",
+    'cancel'                         => 'Cancel',
 ];
