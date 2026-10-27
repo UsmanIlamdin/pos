@@ -108,15 +108,23 @@ $invoiceColumns = 4;
         $previouslyPaid = (float) ($summary['previously_paid_on_sales'] ?? 0);
         $creditsApplied = (float) ($summary['credits_applied_to_sales'] ?? $details['credits_applied'] ?? 0);
         $paymentsApplied = (float) ($summary['payments_applied'] ?? $details['paid'] ?? 0);
+        $returnsTotal = (float) ($summary['returns_total'] ?? 0);
         ?>
         <tr>
             <td class="blank" colspan="<?= $invoiceColumns ?>" style="text-align: center;"><?= '&nbsp;' ?></td>
         </tr>
         <tr>
             <td colspan="<?= $invoiceColumns - 2 ?>" class="blank-bottom"> </td>
-            <td class="total-line"><?= lang('Accounts.invoice_total') ?></td>
-            <td class="total-value"><?= to_currency($summary['net_invoice_amount'] ?? $invoice['total_amount']) ?></td>
+            <td class="total-line"><?= lang('Accounts.original_sales_total') ?></td>
+            <td class="total-value"><?= to_currency($summary['original_sales_total'] ?? $invoice['total_amount']) ?></td>
         </tr>
+        <?php if (abs($returnsTotal) > 0.00001): ?>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 2 ?>" class="blank"> </td>
+            <td class="total-line"><?= lang('Accounts.returns_total') ?></td>
+            <td class="total-value"><?= to_currency($returnsTotal) ?></td>
+        </tr>
+        <?php endif; ?>
         <?php if ($previouslyPaid > 0.00001): ?>
         <tr>
             <td colspan="<?= $invoiceColumns - 2 ?>" class="blank"> </td>
@@ -124,6 +132,11 @@ $invoiceColumns = 4;
             <td class="total-value"><?= to_currency(-$previouslyPaid) ?></td>
         </tr>
         <?php endif; ?>
+        <tr>
+            <td colspan="<?= $invoiceColumns - 2 ?>" class="blank"> </td>
+            <td class="total-line"><?= lang('Accounts.net_invoice_amount') ?></td>
+            <td class="total-value"><?= to_currency($summary['net_invoice_amount'] ?? $invoice['total_amount']) ?></td>
+        </tr>
         <tr>
             <td colspan="<?= $invoiceColumns - 2 ?>" class="blank"> </td>
             <td class="total-line"><?= lang('Accounts.payments_applied_to_ci') ?></td>

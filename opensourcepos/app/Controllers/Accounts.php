@@ -85,6 +85,7 @@ class Accounts extends Secure_Controller
             static fn (array $sale): bool => empty($sale['on_consolidated_invoice'])
         ));
         $openInvoices = $this->invoiceLib->listOpenForCustomer($customerId);
+        $lastPayment = $this->getLastPaymentDisplay($customerId);
 
         $data = [
             'person_info'             => $person,
@@ -100,6 +101,7 @@ class Accounts extends Secure_Controller
             'invoices_page'           => $invoicePage,
             'open_invoice_count'      => count($openInvoices),
             'open_invoice_balance'    => $this->invoiceLib->getOpenBalanceTotalForCustomer($customerId),
+            'last_payment'            => $lastPayment,
             'ledger'                  => $ledgerPage['rows'],
             'ledger_page'             => $ledgerPage,
             'account_level'           => $ledgerPage['account_level'] ?? [],
@@ -140,12 +142,24 @@ class Accounts extends Secure_Controller
         $offset = ($page - 1) * $perPage;
         $slice = array_slice($all, $offset, $perPage);
 
+        $ciIds = [];
+        foreach ($slice as $sale) {
+            if (!empty($sale['consolidated_invoice_id'])) {
+                $ciIds[] = (int) $sale['consolidated_invoice_id'];
+            }
+        }
+        $ciNumberMap = $this->consolidatedInvoiceNumberMap($ciIds);
+
         $rows = [];
         foreach ($slice as $sale) {
+            $ciId = !empty($sale['consolidated_invoice_id']) ? (int) $sale['consolidated_invoice_id'] : null;
+            $ciNumber = $ciId !== null ? (string) ($ciNumberMap[$ciId] ?? '') : '';
             $rows[] = [
                 'sale_id'        => (int) $sale['sale_id'],
                 'date'           => esc(to_datetime(strtotime((string) $sale['sale_time']))),
                 'invoice_number' => esc((string) ($sale['invoice_number'] ?? '')),
+                'ci_number'      => esc($ciNumber),
+                'ci_id'          => $ciId,
                 'total'          => to_currency($sale['total']),
                 'paid'           => to_currency($sale['paid']),
                 'outstanding'    => to_currency($sale['outstanding']),
@@ -190,6 +204,14 @@ class Accounts extends Secure_Controller
                     'can_reallocate' => !empty($child['can_reallocate']),
                 ];
             }
+            $statusKey = (string) ($row['status'] ?? '');
+            $statusLabel = match ($statusKey) {
+                SALE_PAY_STATUS_PAID => lang('Accounts.status_paid'),
+                SALE_PAY_STATUS_PARTIAL => lang('Accounts.status_partially_paid'),
+                SALE_PAY_STATUS_UNPAID => lang('Accounts.filter_unpaid'),
+                SALE_PAY_STATUS_CANCELLED => lang('Accounts.status_cancelled'),
+                default => $statusKey,
+            };
             $rows[] = [
                 'sale_id'    => $row['sale_id'],
                 'date'       => esc(to_datetime(strtotime((string) $row['date']))),
@@ -198,7 +220,8 @@ class Accounts extends Secure_Controller
                 'payments'   => to_currency($row['payments']),
                 'credits'    => to_currency($row['credits']),
                 'balance'    => to_currency($row['balance']),
-                'status'     => esc((string) $row['status']),
+                'status'     => esc($statusLabel),
+                'status_key' => esc($statusKey),
                 'children'   => $children,
             ];
         }
@@ -222,14 +245,29 @@ class Accounts extends Secure_Controller
 
         $rows = [];
         foreach ($result['rows'] as $row) {
+            $reference = (string) ($row['reference'] ?? '');
+            $memo = (string) ($row['memo'] ?? '');
+            $type = (string) ($row['type'] ?? '');
+            $isVoided = !empty($row['voided'])
+                || stripos($reference, '[voided]') !== false
+                || stripos($reference, 'Void ') === 0
+                || stripos($type, 'void') !== false;
+            $isReversal = $isVoided
+                || stripos($type, 'void') !== false
+                || stripos($reference, 'Void ') === 0
+                || stripos($memo, 'voided') !== false;
             $rows[] = [
                 'date'         => esc(to_datetime(strtotime((string) $row['date']))),
-                'reference'    => esc((string) $row['reference']),
+                'reference'    => esc($reference),
                 'allocated_to' => esc((string) ($row['allocated_to'] ?? '')),
-                'memo'         => esc((string) ($row['memo'] ?? '')),
+                'memo'         => esc($memo),
                 'debit'        => $row['debit'] ? to_currency($row['debit']) : '',
                 'credit'       => $row['credit'] ? to_currency($row['credit']) : '',
                 'balance'      => to_currency($row['balance']),
+                // Display-only classification from existing reference/memo text.
+                'voided'       => $isVoided,
+                'reversal'     => $isReversal,
+                'type'         => esc($type),
             ];
         }
 
@@ -244,10 +282,15 @@ class Accounts extends Secure_Controller
 
         $rows = [];
         foreach ($result['rows'] as $row) {
+            $dateRaw = (string) ($row['date'] ?? '');
+            $dateTs = strtotime($dateRaw);
             $rows[] = [
-                'date'      => esc((string) $row['date']),
+                'date'      => esc($dateTs ? to_datetime($dateTs) : $dateRaw),
                 'reference' => esc((string) $row['reference']),
                 'memo'      => esc((string) ($row['memo'] ?? '')),
+                // Display-only flags already present on activity events.
+                'voided'    => !empty($row['voided']),
+                'type'      => esc((string) ($row['type'] ?? '')),
             ];
         }
 
@@ -264,14 +307,23 @@ class Accounts extends Secure_Controller
         $rows = [];
         foreach ($result['rows'] as $invoice) {
             $id = (int) $invoice['consolidated_invoice_id'];
+            $status = (int) $invoice['status'];
+            $dateRaw = (string) $invoice['invoice_date'];
+            $dateTs = strtotime($dateRaw);
             $rows[] = [
                 'invoice_number' => esc((string) $invoice['invoice_number']),
-                'invoice_date'   => esc((string) $invoice['invoice_date']),
-                'status'         => esc($statusLabels[(int) $invoice['status']] ?? ''),
+                'invoice_date'   => esc($dateTs ? to_date($dateTs) : $dateRaw),
+                'status'         => esc($statusLabels[$status] ?? ''),
+                'status_key'     => $status,
                 'total'          => to_currency($invoice['total_amount']),
                 'paid'           => to_currency($invoice['paid']),
                 'balance'        => to_currency($invoice['balance']),
-                'actions'        => anchor('accounts/invoice/' . $id, lang('Accounts.view_invoice')),
+                'has_balance'    => (float) ($invoice['balance'] ?? 0) > 0.00001,
+                'actions'        => anchor(
+                    'accounts/invoice/' . $id,
+                    lang('Accounts.view_invoice'),
+                    ['class' => 'btn btn-xs btn-info']
+                ),
             ];
         }
 
@@ -941,6 +993,87 @@ class Accounts extends Secure_Controller
             'ledger'      => $markActive($ledger),
             'transaction' => $markActive($transaction),
             'activity'    => $markActive($activity),
+        ];
+    }
+
+    /**
+     * Display-only map of consolidated invoice IDs to invoice numbers.
+     *
+     * @param list<int> $ciIds
+     * @return array<int, string>
+     */
+    private function consolidatedInvoiceNumberMap(array $ciIds): array
+    {
+        $ciIds = array_values(array_unique(array_filter(array_map('intval', $ciIds))));
+        if ($ciIds === []) {
+            return [];
+        }
+
+        $rows = db_connect()->table('consolidated_invoices')
+            ->select('consolidated_invoice_id, invoice_number')
+            ->whereIn('consolidated_invoice_id', $ciIds)
+            ->get()
+            ->getResultArray();
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int) $row['consolidated_invoice_id']] = (string) $row['invoice_number'];
+        }
+
+        return $map;
+    }
+
+    /**
+     * Display-only: most recent active account payment, else most recent POS payment.
+     *
+     * @return array{amount:string, date:string, type:string, source:string}|null
+     */
+    private function getLastPaymentDisplay(int $customerId): ?array
+    {
+        $db = db_connect();
+
+        $accountPayment = $db->table('customer_account_payments')
+            ->select('payment_amount, payment_time, payment_type')
+            ->where('customer_id', $customerId)
+            ->where('status', CA_STATUS_ACTIVE)
+            ->orderBy('payment_time', 'desc')
+            ->orderBy('payment_id', 'desc')
+            ->get(1)
+            ->getRowArray();
+
+        if ($accountPayment !== null) {
+            $ts = strtotime((string) $accountPayment['payment_time']);
+
+            return [
+                'amount' => to_currency($accountPayment['payment_amount']),
+                'date'   => $ts ? to_datetime($ts) : (string) $accountPayment['payment_time'],
+                'type'   => (string) $accountPayment['payment_type'],
+                'source' => 'account',
+            ];
+        }
+
+        $posPayment = $db->table('sales_payments AS sp')
+            ->select('sp.payment_amount, sp.payment_time, sp.payment_type')
+            ->join('sales AS s', 's.sale_id = sp.sale_id')
+            ->where('s.customer_id', $customerId)
+            ->where('s.sale_status', COMPLETED)
+            ->where('sp.cash_adjustment', 0)
+            ->orderBy('sp.payment_time', 'desc')
+            ->orderBy('sp.payment_id', 'desc')
+            ->get(1)
+            ->getRowArray();
+
+        if ($posPayment === null) {
+            return null;
+        }
+
+        $ts = strtotime((string) $posPayment['payment_time']);
+
+        return [
+            'amount' => to_currency($posPayment['payment_amount']),
+            'date'   => $ts ? to_datetime($ts) : (string) $posPayment['payment_time'],
+            'type'   => (string) $posPayment['payment_type'],
+            'source' => 'pos',
         ];
     }
 

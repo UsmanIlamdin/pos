@@ -23,9 +23,54 @@ $summary = $details['summary'] ?? [
     'balance_due' => (float) $details['balance'],
 ];
 $hasReturns = ((float) ($summary['returns_total'] ?? 0) != 0.0) || !empty($details['returns']);
+$invoiceStatus = (int) $invoice['status'];
+$statusBadgeClass = match ($invoiceStatus) {
+    CI_STATUS_PAID => 'label-success',
+    CI_STATUS_PARTIALLY_PAID => 'label-warning',
+    CI_STATUS_OPEN, CI_STATUS_DRAFT => 'label-info',
+    CI_STATUS_CANCELLED => 'label-default',
+    default => 'label-default',
+};
+$statusLabel = $status_labels[$invoiceStatus] ?? (string) $invoice['status'];
 ?>
 
 <?= view('partial/header') ?>
+
+<style>
+    .ci-summary-section { margin-bottom: 18px; }
+    .ci-summary-section:last-child { margin-bottom: 0; }
+    .ci-summary-section h4 {
+        margin: 0 0 10px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid #e5e5e5;
+        font-size: 14px;
+        font-weight: 700;
+        color: #333;
+    }
+    .ci-summary-table {
+        max-width: 560px;
+        margin-bottom: 0;
+    }
+    .ci-summary-table td {
+        border-top: none !important;
+        padding: 4px 8px !important;
+        vertical-align: middle !important;
+    }
+    .ci-summary-table tr.ci-summary-total td {
+        border-top: 1px solid #ddd !important;
+        padding-top: 8px !important;
+    }
+    .ci-summary-table .ci-amount {
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+    }
+    .ci-history-table .label { margin-left: 4px; }
+    .ci-history-voided { opacity: 0.75; }
+    .ci-history-credit { background-color: #f9f9f9; }
+    .ci-history-original { background-color: #f7fbff; }
+    .account-status-badge { font-size: 12px; vertical-align: middle; }
+</style>
 
 <script type="text/javascript">
     $(document).ready(function() {
@@ -292,25 +337,27 @@ $hasReturns = ((float) ($summary['returns_total'] ?? 0) != 0.0) || !empty($detai
     <?php endif; ?>
 </div>
 
+<?php
+$previouslyPaid = (float) ($summary['previously_paid_on_sales'] ?? 0);
+$creditsApplied = (float) ($summary['credits_applied_to_sales'] ?? $details['credits_applied'] ?? 0);
+$paymentsApplied = (float) ($summary['payments_applied'] ?? $details['paid'] ?? 0);
+$amountConsolidated = (float) ($summary['consolidated_invoice_total'] ?? $invoice['total_amount']);
+$remainingBalance = (float) ($summary['balance_due'] ?? $details['balance']);
+?>
+
 <div class="panel panel-primary">
     <div class="panel-heading">
         <?= lang('Accounts.consolidated_invoice') ?>: <?= esc($invoice['invoice_number']) ?>
+        <span class="label <?= esc($statusBadgeClass) ?> account-status-badge pull-right"><?= esc($statusLabel) ?></span>
     </div>
     <div class="panel-body">
         <div class="row">
             <div class="col-md-6">
                 <p><strong><?= lang('Reports.customer') ?>:</strong> <?= esc($person_info->first_name . ' ' . $person_info->last_name) ?></p>
-                <p><strong><?= lang('Accounts.invoice_date') ?>:</strong> <?= esc($invoice['invoice_date']) ?></p>
-                <p><strong><?= lang('Accounts.due_date') ?>:</strong> <?= esc($invoice['due_date'] ?? '') ?></p>
-                <p><strong><?= lang('Accounts.status') ?>:</strong> <?= esc($status_labels[(int) $invoice['status']] ?? $invoice['status']) ?></p>
             </div>
             <div class="col-md-6 text-right">
-                <p><?= lang('Accounts.invoice_total') ?>: <strong><?= to_currency($invoice['total_amount']) ?></strong></p>
-                <p><?= lang('Accounts.total_paid') ?>: <strong><?= to_currency($details['paid']) ?></strong></p>
-                <?php if ((float) ($details['credits_applied'] ?? $summary['credits_applied_to_sales'] ?? 0) > 0.00001): ?>
-                    <p><?= lang('Accounts.credits_applied') ?>: <strong><?= to_currency($details['credits_applied'] ?? $summary['credits_applied_to_sales']) ?></strong></p>
-                <?php endif; ?>
-                <p><?= lang('Accounts.balance') ?>: <strong><?= to_currency($details['balance']) ?></strong></p>
+                <p><?= lang('Accounts.net_invoice_amount') ?>: <strong><?= to_currency($amountConsolidated) ?></strong></p>
+                <p><?= lang('Accounts.balance_due') ?>: <strong><?= to_currency($remainingBalance) ?></strong></p>
                 <?php if ($isCancelled): ?>
                     <p class="text-muted" style="margin-top:8px;">
                         <?= lang('Accounts.void_invoice_sale_outstanding') ?>:
@@ -323,55 +370,82 @@ $hasReturns = ((float) ($summary['returns_total'] ?? 0) != 0.0) || !empty($detai
 </div>
 
 <div class="panel panel-default">
-    <div class="panel-heading">Invoice Summary</div>
+    <div class="panel-heading"><?= lang('Accounts.invoice_summary') ?></div>
     <div class="panel-body">
-        <?php
-        $previouslyPaid = (float) ($summary['previously_paid_on_sales'] ?? 0);
-        $creditsApplied = (float) ($summary['credits_applied_to_sales'] ?? $details['credits_applied'] ?? 0);
-        ?>
-        <table class="table table-condensed" style="max-width: 520px; margin-bottom:0;">
-            <tbody>
+        <div class="ci-summary-section">
+            <h4><?= lang('Accounts.summary_original_sales') ?></h4>
+            <table class="table table-condensed ci-summary-table">
+                <tbody>
                 <tr>
                     <td><?= lang('Accounts.original_sales_total') ?></td>
-                    <td class="text-right"><?= to_currency($summary['original_sales_total'] ?? 0) ?></td>
+                    <td class="ci-amount"><?= to_currency($summary['original_sales_total'] ?? 0) ?></td>
                 </tr>
                 <?php if ($hasReturns): ?>
                 <tr>
                     <td><?= lang('Accounts.returns_total') ?></td>
-                    <td class="text-right"><?= to_currency($summary['returns_total']) ?></td>
+                    <td class="ci-amount"><?= to_currency($summary['returns_total']) ?></td>
                 </tr>
                 <?php endif; ?>
                 <?php if ($previouslyPaid > 0.00001): ?>
                 <tr>
                     <td><?= lang('Accounts.previously_paid_on_sales') ?></td>
-                    <td class="text-right"><?= to_currency(-$previouslyPaid) ?></td>
+                    <td class="ci-amount"><?= to_currency(-$previouslyPaid) ?></td>
                 </tr>
                 <?php endif; ?>
-                <tr>
-                    <td><?= lang('Accounts.net_invoice_amount') ?></td>
-                    <td class="text-right"><?= to_currency($summary['consolidated_invoice_total'] ?? $invoice['total_amount']) ?></td>
+                <tr class="ci-summary-total">
+                    <td><strong><?= lang('Accounts.net_invoice_amount') ?></strong></td>
+                    <td class="ci-amount"><strong><?= to_currency($amountConsolidated) ?></strong></td>
                 </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="ci-summary-section">
+            <h4><?= lang('Accounts.summary_settlement') ?></h4>
+            <table class="table table-condensed ci-summary-table">
+                <tbody>
                 <tr>
                     <td><?= lang('Accounts.payments_applied_to_ci') ?></td>
-                    <td class="text-right"><?= to_currency($summary['payments_applied'] ?? $details['paid']) ?></td>
+                    <td class="ci-amount"><?= to_currency($paymentsApplied) ?></td>
                 </tr>
                 <?php if ($creditsApplied > 0.00001): ?>
                 <tr>
                     <td><?= lang('Accounts.credits_applied_to_sales') ?></td>
-                    <td class="text-right"><?= to_currency(-$creditsApplied) ?></td>
+                    <td class="ci-amount"><?= to_currency(-$creditsApplied) ?></td>
                 </tr>
                 <?php endif; ?>
-                <tr>
+                <tr class="ci-summary-total">
                     <td><strong><?= lang('Accounts.balance_due') ?></strong></td>
-                    <td class="text-right"><strong><?= to_currency($summary['balance_due'] ?? $details['balance']) ?></strong></td>
+                    <td class="ci-amount"><strong><?= to_currency($remainingBalance) ?></strong></td>
                 </tr>
-            </tbody>
-        </table>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="ci-summary-section">
+            <h4><?= lang('Accounts.summary_invoice_status') ?></h4>
+            <table class="table table-condensed ci-summary-table">
+                <tbody>
+                <tr>
+                    <td><?= lang('Accounts.status') ?></td>
+                    <td class="ci-amount"><span class="label <?= esc($statusBadgeClass) ?>"><?= esc($statusLabel) ?></span></td>
+                </tr>
+                <tr>
+                    <td><?= lang('Accounts.invoice_date') ?></td>
+                    <td class="ci-amount"><?= esc($invoice['invoice_date']) ?></td>
+                </tr>
+                <tr>
+                    <td><?= lang('Accounts.due_date') ?></td>
+                    <td class="ci-amount"><?= esc($invoice['due_date'] ?? '') ?></td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 
 <div class="panel panel-default">
-    <div class="panel-heading">Items</div>
+    <div class="panel-heading"><?= lang('Accounts.items') ?></div>
     <div class="panel-body">
         <?php if ($details['sales'] === []): ?>
             <p>No sales are associated with this consolidated invoice.</p>
@@ -417,7 +491,7 @@ $hasReturns = ((float) ($summary['returns_total'] ?? 0) != 0.0) || !empty($detai
 
 <?php if (!empty($details['returns'])): ?>
 <div class="panel panel-default">
-    <div class="panel-heading">Returns &amp; Adjustments</div>
+    <div class="panel-heading"><?= lang('Accounts.returns_adjustments') ?></div>
     <div class="panel-body">
         <table class="table table-striped table-bordered table-condensed">
             <thead>
@@ -444,50 +518,32 @@ $hasReturns = ((float) ($summary['returns_total'] ?? 0) != 0.0) || !empty($detai
 <?php endif; ?>
 
 <div class="panel panel-default">
-    <div class="panel-heading">Payment Summary</div>
+    <div class="panel-heading"><?= lang('Accounts.payment_details') ?></div>
     <div class="panel-body">
-        <table class="table table-condensed" style="max-width: 520px; margin-bottom:0;">
-            <tbody>
-                <tr>
-                    <td><?= lang('Accounts.invoice_total') ?> <small class="text-muted">(consolidated)</small></td>
-                    <td class="text-right"><?= to_currency($summary['consolidated_invoice_total'] ?? $invoice['total_amount']) ?></td>
-                </tr>
-                <tr>
-                    <td><?= lang('Accounts.payments_applied_to_ci') ?></td>
-                    <td class="text-right"><?= to_currency($summary['payments_applied'] ?? $details['paid']) ?></td>
-                </tr>
-                <?php if ((float) ($summary['credits_applied_to_sales'] ?? 0) > 0.00001): ?>
-                <tr>
-                    <td><?= lang('Accounts.credits_applied_to_sales') ?></td>
-                    <td class="text-right"><?= to_currency(-((float) $summary['credits_applied_to_sales'])) ?></td>
-                </tr>
-                <?php endif; ?>
-                <tr>
-                    <td><strong><?= lang('Accounts.balance_due') ?></strong></td>
-                    <td class="text-right"><strong><?= to_currency($summary['balance_due'] ?? $details['balance']) ?></strong></td>
-                </tr>
-            </tbody>
-        </table>
         <?php
         $activePayments = array_values(array_filter(
             $details['payments'] ?? [],
             static fn (array $payment): bool => empty($payment['voided'])
         ));
         ?>
-        <?php if ($activePayments !== []): ?>
-            <table class="table table-striped table-bordered table-condensed" style="margin-top: 15px;">
+        <?php if ($activePayments === []): ?>
+            <p class="text-muted" style="margin-bottom:0;"><?= lang('Accounts.no_payments_on_invoice') ?></p>
+        <?php else: ?>
+            <table class="table table-striped table-bordered table-condensed ci-history-table" style="margin-bottom:0;">
                 <thead>
                 <tr>
-                    <th>Date</th>
-                    <th>Type</th>
-                    <th>Reference</th>
-                    <th class="text-right">Amount</th>
+                    <th><?= lang('Reports.date') ?></th>
+                    <th><?= lang('Accounts.payment_category') ?></th>
+                    <th><?= lang('Accounts.payment_type') ?></th>
+                    <th><?= lang('Accounts.reference') ?></th>
+                    <th class="text-right"><?= lang('Accounts.amount') ?></th>
                 </tr>
                 </thead>
                 <tbody>
                 <?php foreach ($activePayments as $payment): ?>
                     <tr>
                         <td><?= esc($payment['payment_time']) ?></td>
+                        <td><span class="label label-primary"><?= lang('Accounts.payment_category_ci') ?></span></td>
                         <td><?= esc($payment['payment_type']) ?></td>
                         <td><?= esc($payment['reference_code'] ?: '-') ?></td>
                         <td class="text-right"><?= to_currency($payment['payment_amount']) ?></td>
@@ -500,7 +556,7 @@ $hasReturns = ((float) ($summary['returns_total'] ?? 0) != 0.0) || !empty($detai
 </div>
 
 <div class="panel panel-default">
-    <div class="panel-heading">Underlying Transactions</div>
+    <div class="panel-heading"><?= lang('Accounts.underlying_sales') ?></div>
     <div class="panel-body">
         <?php if ($details['sales'] === []): ?>
             <p>No sales are associated with this consolidated invoice.</p>
@@ -586,36 +642,25 @@ $hasReturns = ((float) ($summary['returns_total'] ?? 0) != 0.0) || !empty($detai
             $details['sales'] ?? [],
             static fn (array $sale): bool => (float) ($sale['credits_applied'] ?? 0) > 0.00001
         ));
+        $originalSalePaymentRows = array_values(array_filter(
+            $details['sales'] ?? [],
+            static fn (array $sale): bool => (float) ($sale['paid_on_sale'] ?? 0) > 0.00001
+        ));
+        $returnHistoryRows = $details['returns'] ?? [];
+        $hasHistoryRows = $details['payments'] !== []
+            || $creditSaleRows !== []
+            || $originalSalePaymentRows !== []
+            || $returnHistoryRows !== [];
         ?>
-        <?php if ($creditsAppliedHistory > 0.00001): ?>
-            <table class="table table-striped" style="margin-bottom: 15px;">
-                <thead>
-                <tr>
-                    <th><?= lang('Accounts.credits_applied_to_sales') ?></th>
-                    <th><?= lang('Common.id') ?></th>
-                    <th class="text-right"><?= lang('Sales.amount_tendered') ?></th>
-                </tr>
-                </thead>
-                <tbody>
-                <?php foreach ($creditSaleRows as $sale): ?>
-                    <tr>
-                        <td><?= lang('Accounts.customer_credit') ?></td>
-                        <td>Sale #<?= (int) $sale['sale_id'] ?></td>
-                        <td class="text-right"><?= to_currency($sale['credits_applied']) ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
-        <?php endif; ?>
-        <?php if ($details['payments'] === []): ?>
-            <?php if ($creditsAppliedHistory <= 0.00001): ?>
-                <p><?= lang('Accounts.no_payments_on_invoice') ?></p>
-            <?php endif; ?>
+        <?php if (!$hasHistoryRows): ?>
+            <p><?= lang('Accounts.no_payments_on_invoice') ?></p>
         <?php else: ?>
-            <table class="table table-striped">
+            <div class="table-responsive">
+            <table class="table table-striped table-hover ci-history-table">
                 <thead>
                 <tr>
                     <th><?= lang('Reports.date') ?></th>
+                    <th><?= lang('Accounts.payment_category') ?></th>
                     <th><?= lang('Accounts.payment_type') ?></th>
                     <th><?= lang('Accounts.reference') ?></th>
                     <th class="text-right"><?= lang('Sales.amount_tendered') ?></th>
@@ -627,6 +672,48 @@ $hasReturns = ((float) ($summary['returns_total'] ?? 0) != 0.0) || !empty($detai
                 </tr>
                 </thead>
                 <tbody>
+                <?php foreach ($originalSalePaymentRows as $sale): ?>
+                    <tr class="ci-history-original">
+                        <td>—</td>
+                        <td><span class="label label-info"><?= lang('Accounts.payment_category_original_sale') ?></span></td>
+                        <td><?= lang('Accounts.pos_payment') ?></td>
+                        <td>Sale #<?= (int) $sale['sale_id'] ?><?= !empty($sale['invoice_number']) ? ' / ' . esc($sale['invoice_number']) : '' ?></td>
+                        <td class="text-right"><?= to_currency($sale['paid_on_sale']) ?></td>
+                        <td>Sale #<?= (int) $sale['sale_id'] ?></td>
+                        <td><?= lang('Accounts.previously_paid_on_sales') ?></td>
+                        <?php if ($can_void): ?>
+                            <td></td>
+                        <?php endif; ?>
+                    </tr>
+                <?php endforeach; ?>
+                <?php foreach ($returnHistoryRows as $return): ?>
+                    <tr>
+                        <td>—</td>
+                        <td><span class="label label-warning"><?= lang('Accounts.payment_category_return') ?></span></td>
+                        <td><?= lang('Accounts.returns_adjustments') ?></td>
+                        <td><?= esc($return['reference'] ?? '-') ?></td>
+                        <td class="text-right"><?= to_currency($return['amount']) ?></td>
+                        <td><?= esc($return['related_sale'] ?? '') ?></td>
+                        <td><?= esc($return['description'] ?? '') ?></td>
+                        <?php if ($can_void): ?>
+                            <td></td>
+                        <?php endif; ?>
+                    </tr>
+                <?php endforeach; ?>
+                <?php foreach ($creditSaleRows as $sale): ?>
+                    <tr class="ci-history-credit">
+                        <td>—</td>
+                        <td><span class="label label-success"><?= lang('Accounts.payment_category_credit') ?></span></td>
+                        <td><?= lang('Accounts.customer_credit') ?></td>
+                        <td>Sale #<?= (int) $sale['sale_id'] ?></td>
+                        <td class="text-right"><?= to_currency($sale['credits_applied']) ?></td>
+                        <td>Sale #<?= (int) $sale['sale_id'] ?></td>
+                        <td><?= lang('Accounts.credits_applied_to_sales') ?></td>
+                        <?php if ($can_void): ?>
+                            <td></td>
+                        <?php endif; ?>
+                    </tr>
+                <?php endforeach; ?>
                 <?php foreach ($details['payments'] as $payment): ?>
                     <?php
                     $isVoidedPayment = !empty($payment['voided']);
@@ -635,8 +722,15 @@ $hasReturns = ((float) ($summary['returns_total'] ?? 0) != 0.0) || !empty($detai
                         $allocParts[] = 'Sale #' . (int) $alloc['sale_id'] . ' — ' . to_currency($alloc['amount']);
                     }
                     ?>
-                    <tr class="<?= $isVoidedPayment ? 'text-muted' : '' ?>">
+                    <tr class="<?= $isVoidedPayment ? 'text-muted ci-history-voided' : '' ?>">
                         <td><?= esc($payment['payment_time']) ?></td>
+                        <td>
+                            <?php if ($isVoidedPayment): ?>
+                                <span class="label label-default"><?= lang('Accounts.payment_category_voided') ?></span>
+                            <?php else: ?>
+                                <span class="label label-primary"><?= lang('Accounts.payment_category_ci') ?></span>
+                            <?php endif; ?>
+                        </td>
                         <td>
                             <?= esc($payment['payment_type']) ?>
                             <?php if ($isVoidedPayment): ?>
@@ -669,6 +763,7 @@ $hasReturns = ((float) ($summary['returns_total'] ?? 0) != 0.0) || !empty($detai
                 <?php endforeach; ?>
                 </tbody>
             </table>
+            </div>
         <?php endif; ?>
     </div>
 </div>

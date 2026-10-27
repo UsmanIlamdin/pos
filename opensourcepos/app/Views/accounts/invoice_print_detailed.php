@@ -210,8 +210,8 @@ $invoiceColumns = 5;
         <?php endif; ?>
         <tr>
             <td colspan="<?= $invoiceColumns - 3 ?>" class="<?= $showFootingDetail ? 'blank' : 'blank-bottom' ?>"> </td>
-            <td colspan="2" class="total-line"><?= lang('Accounts.net_invoice_amount') ?></td>
-            <td class="total-value"><?= to_currency($summary['net_invoice_amount'] ?? $invoice['total_amount']) ?></td>
+            <td colspan="2" class="total-line"><strong><?= lang('Accounts.net_invoice_amount') ?></strong></td>
+            <td class="total-value"><strong><?= to_currency($summary['net_invoice_amount'] ?? $invoice['total_amount']) ?></strong></td>
         </tr>
         <tr>
             <td colspan="<?= $invoiceColumns - 3 ?>" class="blank"> </td>
@@ -227,8 +227,8 @@ $invoiceColumns = 5;
         <?php endif; ?>
         <tr>
             <td colspan="<?= $invoiceColumns - 3 ?>" class="blank"> </td>
-            <td colspan="2" class="total-line"><?= lang('Accounts.balance_due') ?></td>
-            <td class="total-value"><?= to_currency($summary['balance_due'] ?? $details['balance']) ?></td>
+            <td colspan="2" class="total-line"><strong><?= lang('Accounts.balance_due') ?></strong></td>
+            <td class="total-value"><strong><?= to_currency($summary['balance_due'] ?? $details['balance']) ?></strong></td>
         </tr>
         <?php
         // Fallback: payments with no sale allocations still show as a single line.

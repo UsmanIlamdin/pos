@@ -221,8 +221,8 @@ $summary = $details['summary'] ?? [];
         <?php endif; ?>
         <tr>
             <td class="blank" colspan="2"></td>
-            <td colspan="2" class="total-line"><?= lang('Accounts.net_invoice_amount') ?></td>
-            <td class="total-value"><?= to_currency($summary['net_invoice_amount'] ?? $invoice['total_amount']) ?></td>
+            <td colspan="2" class="total-line"><strong><?= lang('Accounts.net_invoice_amount') ?></strong></td>
+            <td class="total-value"><strong><?= to_currency($summary['net_invoice_amount'] ?? $invoice['total_amount']) ?></strong></td>
         </tr>
         <tr>
             <td class="blank" colspan="2"></td>
@@ -238,8 +238,8 @@ $summary = $details['summary'] ?? [];
         <?php endif; ?>
         <tr>
             <td class="blank" colspan="2"></td>
-            <td colspan="2" class="total-line"><?= lang('Accounts.balance_due') ?></td>
-            <td class="total-value"><?= to_currency($summary['balance_due'] ?? $details['balance']) ?></td>
+            <td colspan="2" class="total-line"><strong><?= lang('Accounts.balance_due') ?></strong></td>
+            <td class="total-value"><strong><?= to_currency($summary['balance_due'] ?? $details['balance']) ?></strong></td>
         </tr>
         <?php
         $unallocatedPayments = [];

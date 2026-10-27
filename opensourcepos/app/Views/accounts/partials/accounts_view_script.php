@@ -273,11 +273,30 @@
         return $('<div>').text(value == null ? '' : String(value)).html();
     }
 
+    function statusBadge(label, key) {
+        var text = String(label || key || '');
+        var raw = String(key || label || '').toLowerCase().replace(/\s+/g, '_');
+        var cls = 'label-default';
+        if (raw === '3' || raw === 'paid' || raw.indexOf('paid') === 0 && raw.indexOf('partial') === -1) {
+            cls = 'label-success';
+        } else if (raw === '2' || raw.indexOf('partial') !== -1) {
+            cls = 'label-warning';
+        } else if (raw === '1' || raw === '0' || raw === 'open' || raw === 'draft' || raw === 'unpaid') {
+            cls = 'label-info';
+        } else if (raw === '4' || raw.indexOf('cancel') !== -1 || raw.indexOf('void') !== -1) {
+            cls = 'label-default';
+        }
+        if (!text) {
+            return '';
+        }
+        return '<span class="label ' + cls + ' account-status-badge">' + escapeHtml(text) + '</span>';
+    }
+
     function initAccountView(options) {
         var labels = options.labels || {};
         var perPage = options.perPage || 25;
-        var customerId = options.customerId;
         var urls = options.urls || {};
+        var ciStatusLabels = options.ciStatusLabels || {};
 
         var sections = [
             new AccountSection({
@@ -290,15 +309,26 @@
                 emptyFiltered: labels.noOutstandingFiltered,
                 labels: labels,
                 renderRows: function ($body, rows) {
+                    var invoiceBase = (options.urls && options.urls.invoiceBase) || '';
                     rows.forEach(function (row) {
+                        var ciCell = '—';
+                        if (row.ci_number) {
+                            if (row.ci_id && invoiceBase) {
+                                ciCell = '<a href="' + escapeHtml(invoiceBase + '/' + row.ci_id) + '">' +
+                                    row.ci_number + '</a>';
+                            } else {
+                                ciCell = row.ci_number;
+                            }
+                        }
                         $body.append(
                             '<tr>' +
                             '<td>' + escapeHtml(row.sale_id) + '</td>' +
                             '<td>' + row.date + '</td>' +
                             '<td>' + row.invoice_number + '</td>' +
-                            '<td class="text-right">' + row.total + '</td>' +
-                            '<td class="text-right">' + row.paid + '</td>' +
-                            '<td class="text-right">' + row.outstanding + '</td>' +
+                            '<td>' + ciCell + '</td>' +
+                            '<td class="text-right account-money">' + row.total + '</td>' +
+                            '<td class="text-right account-money">' + row.paid + '</td>' +
+                            '<td class="text-right account-money account-balance-emphasis">' + row.outstanding + '</td>' +
                             '</tr>'
                         );
                     });
@@ -315,15 +345,21 @@
                 labels: labels,
                 renderRows: function ($body, rows) {
                     rows.forEach(function (row) {
+                        var statusKey = row.status_key;
+                        var statusText = row.status;
+                        if (statusText === '' && ciStatusLabels[statusKey] != null) {
+                            statusText = ciStatusLabels[statusKey];
+                        }
+                        var rowClass = row.has_balance ? ' account-row-open' : '';
                         $body.append(
-                            '<tr>' +
-                            '<td>' + row.invoice_number + '</td>' +
+                            '<tr class="' + rowClass + '">' +
+                            '<td><strong>' + row.invoice_number + '</strong></td>' +
                             '<td>' + row.invoice_date + '</td>' +
-                            '<td>' + row.status + '</td>' +
-                            '<td class="text-right">' + row.total + '</td>' +
-                            '<td class="text-right">' + row.paid + '</td>' +
-                            '<td class="text-right">' + row.balance + '</td>' +
-                            '<td>' + row.actions + '</td>' +
+                            '<td>' + statusBadge(statusText, statusKey) + '</td>' +
+                            '<td class="text-right account-money">' + row.total + '</td>' +
+                            '<td class="text-right account-money">' + row.paid + '</td>' +
+                            '<td class="text-right account-money account-balance-emphasis">' + row.balance + '</td>' +
+                            '<td class="account-actions">' + row.actions + '</td>' +
                             '</tr>'
                         );
                     });
@@ -342,14 +378,14 @@
                     rows.forEach(function (row) {
                         $body.append(
                             '<tr class="ledger-parent" data-sale-id="' + escapeHtml(row.sale_id) + '">' +
-                            '<td><button type="button" class="btn btn-xs btn-default ledger-toggle">+</button></td>' +
+                            '<td><button type="button" class="btn btn-xs btn-default ledger-toggle" aria-label="Expand">+</button></td>' +
                             '<td>' + row.date + '</td>' +
                             '<td>' + row.reference + '</td>' +
-                            '<td class="text-right">' + row.sale_total + '</td>' +
-                            '<td class="text-right">' + row.payments + '</td>' +
-                            '<td class="text-right">' + row.credits + '</td>' +
-                            '<td class="text-right">' + row.balance + '</td>' +
-                            '<td>' + row.status + '</td>' +
+                            '<td class="text-right account-money">' + row.sale_total + '</td>' +
+                            '<td class="text-right account-money">' + row.payments + '</td>' +
+                            '<td class="text-right account-money">' + row.credits + '</td>' +
+                            '<td class="text-right account-money account-balance-emphasis">' + row.balance + '</td>' +
+                            '<td>' + statusBadge(row.status, row.status_key) + '</td>' +
                             '</tr>'
                         );
                         (row.children || []).forEach(function (child) {
@@ -363,13 +399,13 @@
                                     escapeHtml(child.payment_id) + '">' + escapeHtml(labels.changeAllocation || 'Change') + '</button>';
                             }
                             $body.append(
-                                '<tr class="ledger-child" data-parent="' + escapeHtml(row.sale_id) + '" style="display:none; background:#f9f9f9;">' +
+                                '<tr class="ledger-child" data-parent="' + escapeHtml(row.sale_id) + '" style="display:none;">' +
                                 '<td></td>' +
                                 '<td>' + child.date + '</td>' +
                                 '<td colspan="2">' + child.reference +
-                                ' <small>(' + escapeHtml(child.source) + ')</small></td>' +
-                                '<td class="text-right" colspan="2">' + child.amount + '</td>' +
-                                '<td colspan="2">' + actions + '</td>' +
+                                ' <small class="text-muted">(' + escapeHtml(child.source) + ')</small></td>' +
+                                '<td class="text-right account-money" colspan="2">' + child.amount + '</td>' +
+                                '<td colspan="2" class="account-actions">' + actions + '</td>' +
                                 '</tr>'
                             );
                         });
@@ -387,20 +423,32 @@
                 labels: labels,
                 renderRows: function ($body, rows) {
                     rows.forEach(function (row) {
-                        var ref = row.reference;
+                        var ref = '<div class="account-tx-ref">' + row.reference + '</div>';
                         if (row.allocated_to) {
-                            ref += '<br><small>' + row.allocated_to + '</small>';
+                            ref += '<div class="account-tx-alloc"><small class="text-muted">' + row.allocated_to + '</small></div>';
                         }
                         if (row.memo) {
-                            ref += '<br><small>' + row.memo + '</small>';
+                            ref += '<div class="account-tx-memo"><small class="text-muted">' + row.memo + '</small></div>';
+                        }
+                        if (row.voided) {
+                            ref += ' <span class="label label-default account-status-badge">' +
+                                escapeHtml(labels.voided || 'Voided') + '</span>';
+                        }
+                        var rowClass = '';
+                        if (row.voided || row.reversal) {
+                            rowClass = ' account-row-voided';
+                        } else if (row.debit) {
+                            rowClass = ' account-row-debit';
+                        } else if (row.credit) {
+                            rowClass = ' account-row-credit';
                         }
                         $body.append(
-                            '<tr>' +
+                            '<tr class="' + rowClass + '">' +
                             '<td>' + row.date + '</td>' +
                             '<td>' + ref + '</td>' +
-                            '<td class="text-right">' + (row.debit || '') + '</td>' +
-                            '<td class="text-right">' + (row.credit || '') + '</td>' +
-                            '<td class="text-right">' + row.balance + '</td>' +
+                            '<td class="text-right account-money account-debit">' + (row.debit || '') + '</td>' +
+                            '<td class="text-right account-money account-credit">' + (row.credit || '') + '</td>' +
+                            '<td class="text-right account-money account-balance-emphasis">' + row.balance + '</td>' +
                             '</tr>'
                         );
                     });
@@ -417,10 +465,16 @@
                 labels: labels,
                 renderRows: function ($body, rows) {
                     rows.forEach(function (row) {
+                        var ref = row.reference;
+                        var rowClass = row.voided ? ' account-row-voided' : '';
+                        if (row.voided) {
+                            ref += ' <span class="label label-default account-status-badge">' +
+                                escapeHtml(labels.voided || 'Voided') + '</span>';
+                        }
                         $body.append(
-                            '<tr>' +
+                            '<tr class="' + rowClass + '">' +
                             '<td>' + row.date + '</td>' +
-                            '<td>' + row.reference + '</td>' +
+                            '<td class="account-activity-ref">' + ref + '</td>' +
                             '<td>' + (row.memo || '') + '</td>' +
                             '</tr>'
                         );

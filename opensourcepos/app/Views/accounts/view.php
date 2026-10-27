@@ -39,11 +39,25 @@ $account_filters = $account_filters ?? [
     'activity'    => ['search' => '', 'from' => '', 'to' => '', 'type' => '', 'voided' => '', 'page' => 1, 'active' => false],
 ];
 $outstanding_sales_all = $outstanding_sales_all ?? ($outstanding_sales ?? []);
+$eligible_sales = $eligible_sales ?? [];
 $can_void = $can_void ?? false;
 $can_reallocate = $can_reallocate ?? false;
 $can_credit_apply = $can_credit_apply ?? false;
 $can_refund = $can_refund ?? false;
 $customer_credit = $customer_credit ?? 0;
+// Display-only: same eligibility rules as create-CI (eligible_sales already excludes open-CI sales).
+$allOutstandingOnOpenCi = $eligible_sales === []
+    && (
+        $hasOpenInvoices
+        || array_reduce(
+            $outstanding_sales_all,
+            static fn (bool $carry, array $sale): bool => $carry || !empty($sale['on_consolidated_invoice']),
+            false
+        )
+    );
+$outstandingEmptyMessage = $allOutstandingOnOpenCi
+    ? lang('Accounts.no_outstanding_sales_on_open_ci')
+    : lang('Accounts.no_outstanding_sales');
 $typeChoices = [
     ''                     => lang('Accounts.filter_all'),
     'sale'                 => lang('Accounts.filter_type_sale'),
@@ -71,6 +85,23 @@ $typeChoices = [
             $form.find('[name="reference_code"]').prop('required', needsRef);
         }
 
+        function updateSelectedCiPreview() {
+            const $ciSelect = $('#consolidated_invoice_id');
+            const $preview = $('#selected-ci-preview');
+            if (!$ciSelect.length || !$preview.length) {
+                return;
+            }
+            const $opt = $ciSelect.find('option:selected');
+            const id = $ciSelect.val();
+            if (!id) {
+                $preview.hide();
+                return;
+            }
+            $('#selected-ci-number').text($opt.data('number') || $opt.text());
+            $('#selected-ci-balance').text($opt.data('balance-formatted') || '');
+            $preview.show();
+        }
+
         function toggleApplyTo() {
             const applyTo = $('#apply_to').val();
             $('.apply-sale-group, .apply-sales-group, .apply-ci-group').hide();
@@ -84,6 +115,7 @@ $typeChoices = [
                 $('.apply-ci-group').show();
                 $('#consolidated_invoice_id').prop('required', true);
             }
+            updateSelectedCiPreview();
         }
 
         $('.payment-form').each(function() {
@@ -95,6 +127,7 @@ $typeChoices = [
         });
 
         $('#apply_to').on('change', toggleApplyTo);
+        $('#consolidated_invoice_id').on('change', updateSelectedCiPreview);
         toggleApplyTo();
 
         $('#customer-payment-form').on('submit', function(e) {
@@ -257,6 +290,10 @@ $typeChoices = [
                     if (response.summary.customer_credit_formatted) {
                         $('#account-customer-credit').text(response.summary.customer_credit_formatted);
                     }
+                    if (response.summary.open_invoice_balance_formatted) {
+                        $('#account-open-invoice-balance, #account-open-invoice-balance-display')
+                            .text(response.summary.open_invoice_balance_formatted);
+                    }
                 }
                 if (window.accountsViewApi && typeof window.accountsViewApi.refreshAll === 'function') {
                     window.accountsViewApi.refreshAll();
@@ -396,7 +433,8 @@ $typeChoices = [
                 invoices: <?= json_encode(site_url('accounts/invoices/' . (int) $customer_id)) ?>,
                 ledger: <?= json_encode(site_url('accounts/ledger/' . (int) $customer_id)) ?>,
                 transactions: <?= json_encode(site_url('accounts/transactions/' . (int) $customer_id)) ?>,
-                activity: <?= json_encode(site_url('accounts/activity/' . (int) $customer_id)) ?>
+                activity: <?= json_encode(site_url('accounts/activity/' . (int) $customer_id)) ?>,
+                invoiceBase: <?= json_encode(site_url('accounts/invoice')) ?>
             },
             labels: {
                 showing: <?= json_encode(lang('Accounts.showing_rows')) ?>,
@@ -406,7 +444,7 @@ $typeChoices = [
                 error: <?= json_encode(lang('Accounts.load_error')) ?>,
                 voidPayment: <?= json_encode(lang('Accounts.void_payment')) ?>,
                 changeAllocation: <?= json_encode(lang('Accounts.change_allocation')) ?>,
-                noOutstanding: <?= json_encode(lang('Accounts.no_outstanding_sales')) ?>,
+                noOutstanding: <?= json_encode($outstandingEmptyMessage) ?>,
                 noOutstandingFiltered: <?= json_encode(lang('Accounts.no_outstanding_sales_filtered')) ?>,
                 noCi: <?= json_encode(lang('Accounts.no_consolidated_invoices')) ?>,
                 noCiFiltered: <?= json_encode(lang('Accounts.no_consolidated_invoices_filtered')) ?>,
@@ -415,8 +453,10 @@ $typeChoices = [
                 noTx: <?= json_encode(lang('Accounts.no_account_transactions')) ?>,
                 noTxFiltered: <?= json_encode(lang('Accounts.no_account_transactions_filtered')) ?>,
                 noActivity: <?= json_encode(lang('Accounts.no_account_activity')) ?>,
-                noActivityFiltered: <?= json_encode(lang('Accounts.no_account_activity_filtered')) ?>
-            }
+                noActivityFiltered: <?= json_encode(lang('Accounts.no_account_activity_filtered')) ?>,
+                voided: <?= json_encode(lang('Accounts.status_voided')) ?>
+            },
+            ciStatusLabels: <?= json_encode($status_labels ?? []) ?>
         });
     });
 </script>
@@ -448,11 +488,122 @@ $typeChoices = [
     .section-load-more { margin-top: 8px; }
     .section-loading, .section-error { margin: 8px 0; }
     .section-error { color: #a94442; }
+    .section-empty {
+        padding: 12px 0;
+        color: #666;
+    }
+    .account-section-help {
+        font-size: 12px;
+        color: #666;
+        margin: -4px 0 12px;
+        line-height: 1.45;
+    }
+    .account-summary-panel .account-summary-primary {
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.25);
+    }
+    .account-summary-panel.panel-primary .account-summary-primary {
+        border-bottom-color: rgba(0,0,0,0.08);
+    }
+    .account-summary-panel .account-summary-metric {
+        margin-bottom: 12px;
+    }
+    .account-summary-panel .account-summary-metric:last-child {
+        margin-bottom: 0;
+    }
+    .account-summary-panel .account-summary-label {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        color: #555;
+        margin-bottom: 2px;
+        text-transform: none;
+    }
+    .account-summary-panel .account-summary-value {
+        font-size: 28px;
+        font-weight: 700;
+        margin: 0;
+        line-height: 1.15;
+        font-variant-numeric: tabular-nums;
+    }
+    .account-summary-panel .account-summary-value-sm {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+    }
+    .account-summary-panel .account-summary-help,
+    .account-summary-panel .help-block {
+        font-size: 12px;
+        color: #777;
+        margin: 4px 0 0;
+    }
+    .account-summary-panel .account-summary-intro {
+        font-size: 12px;
+        color: #666;
+        margin: 0 0 14px;
+        line-height: 1.4;
+    }
+    .account-summary-secondary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 18px;
+    }
+    .account-summary-secondary .account-summary-metric {
+        flex: 1 1 120px;
+        min-width: 110px;
+        margin-bottom: 0;
+    }
+    .account-status-badge { font-size: 12px; font-weight: 600; }
+    .account-money { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .account-balance-emphasis { font-weight: 700; }
+    .account-row-open td { background-color: #f7fbff; }
+    .account-row-voided td { color: #888; }
+    .account-row-debit .account-debit { color: #a94442; }
+    .account-row-credit .account-credit { color: #3c763d; }
+    .ledger-child td { background: #f9f9f9; }
+    .account-section .table > thead > tr > th {
+        white-space: nowrap;
+        vertical-align: bottom;
+    }
+    .account-section .table > tbody > tr > td {
+        vertical-align: middle;
+    }
+    .account-section .table-responsive {
+        margin-bottom: 0;
+        border: 0;
+    }
+    .account-actions .btn { margin: 1px 0; }
+    .account-payment-panel .form-group { margin-bottom: 12px; }
+    .selected-ci-preview {
+        margin-top: 8px;
+        padding: 10px 12px;
+        background: #f5f8fa;
+        border: 1px solid #d9e2ec;
+        border-radius: 3px;
+    }
+    .selected-ci-preview .selected-ci-number {
+        font-weight: 700;
+        font-size: 14px;
+        margin: 0 0 4px;
+    }
+    .selected-ci-preview .selected-ci-balance {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    .account-tx-ref { font-weight: 600; }
+    .account-activity-ref { font-weight: 600; }
     @media (max-width: 767px) {
         .account-filter-field,
         .account-filter-actions {
             max-width: none;
             flex: 1 1 100%;
+        }
+        .account-summary-panel .account-summary-value {
+            font-size: 24px;
         }
     }
 </style>
@@ -464,21 +615,64 @@ $typeChoices = [
 
 <div class="row">
     <div class="col-md-4">
-        <div class="panel panel-primary">
-            <div class="panel-heading"><?= lang('Accounts.outstanding_receivables') ?></div>
+        <div class="panel panel-primary account-summary-panel">
+            <div class="panel-heading"><?= lang('Accounts.account') ?></div>
             <div class="panel-body">
-                <h2 id="account-outstanding-balance"><?= to_currency($outstanding_balance) ?></h2>
-                <p><?= lang('Accounts.number_outstanding_sales') ?>: <span id="account-outstanding-count"><?= count($outstanding_sales_all) ?></span></p>
-                <p><?= lang('Accounts.number_open_invoices') ?>: <span id="account-open-invoice-count"><?= (int) $open_invoice_count ?></span></p>
-                <p><?= lang('Accounts.open_invoice_balance') ?>: <strong id="account-open-invoice-balance"><?= to_currency($open_invoice_balance ?? 0) ?></strong></p>
-                <p><?= lang('Accounts.customer_credit') ?>: <strong id="account-customer-credit"><?= to_currency($customer_credit ?? 0) ?></strong></p>
+                <p class="account-summary-intro"><?= lang('Accounts.account_summary_help') ?></p>
+
+                <div class="account-summary-metric account-summary-primary">
+                    <span class="account-summary-label"><?= lang('Accounts.outstanding_balance') ?></span>
+                    <p class="account-summary-value" id="account-outstanding-balance"><?= to_currency($outstanding_balance) ?></p>
+                    <p class="help-block"><?= lang('Accounts.outstanding_receivables_help') ?></p>
+                </div>
+
+                <div class="account-summary-secondary">
+                    <div class="account-summary-metric">
+                        <span class="account-summary-label"><?= lang('Accounts.number_outstanding_sales') ?></span>
+                        <p class="account-summary-value-sm"><span id="account-outstanding-count"><?= count($outstanding_sales_all) ?></span></p>
+                    </div>
+                    <div class="account-summary-metric">
+                        <span class="account-summary-label"><?= lang('Accounts.number_open_invoices') ?></span>
+                        <p class="account-summary-value-sm"><span id="account-open-invoice-count"><?= (int) $open_invoice_count ?></span></p>
+                    </div>
+                    <div class="account-summary-metric">
+                        <span class="account-summary-label"><?= lang('Accounts.available_customer_credit') ?></span>
+                        <p class="account-summary-value-sm" id="account-customer-credit"><?= to_currency($customer_credit ?? 0) ?></p>
+                        <p class="help-block"><?= lang('Accounts.customer_credit_help') ?></p>
+                    </div>
+                </div>
+
+                <?php $lastPayment = $last_payment ?? null; ?>
+                <div class="account-summary-metric" style="margin-top:14px;">
+                    <span class="account-summary-label"><?= lang('Accounts.last_payment') ?></span>
+                    <?php if ($lastPayment !== null): ?>
+                        <p class="account-summary-value-sm" id="account-last-payment-amount"><?= esc($lastPayment['amount']) ?></p>
+                        <p class="help-block" id="account-last-payment-meta" style="margin-bottom:0;">
+                            <?= esc($lastPayment['date']) ?>
+                            <?php if (!empty($lastPayment['type'])): ?>
+                                · <?= esc($lastPayment['type']) ?>
+                            <?php endif; ?>
+                        </p>
+                    <?php else: ?>
+                        <p class="help-block" id="account-last-payment-meta" style="margin-bottom:0;">
+                            <?= lang('Accounts.last_payment_none') ?>
+                        </p>
+                    <?php endif; ?>
+                </div>
+
+                <?php /* Preserve open CI balance for reference without presenting it as a second debt total. */ ?>
+                <p class="help-block" style="margin-top:14px; margin-bottom:0;">
+                    <?= lang('Accounts.open_ci_balance_note') ?>
+                    <span class="sr-only" id="account-open-invoice-balance"><?= to_currency($open_invoice_balance ?? 0) ?></span>
+                    <?php /* Visible copy lives in Consolidated Invoices section heading. */ ?>
+                </p>
             </div>
         </div>
     </div>
 
     <?php if ($can_pay): ?>
         <div class="col-md-8">
-            <div class="panel panel-default">
+            <div class="panel panel-default account-payment-panel">
                 <div class="panel-heading"><?= lang('Accounts.add_payment') ?></div>
                 <div class="panel-body">
                     <?= form_open('accounts/payment/' . $customer_id, ['id' => 'customer-payment-form', 'class' => 'payment-form form-horizontal']) ?>
@@ -546,7 +740,7 @@ $typeChoices = [
                             <?= form_label(lang('Accounts.apply_to_multiple_sales'), 'allocations', ['class' => 'control-label col-xs-3']) ?>
                             <div class="col-xs-8">
                                 <?php if (!$hasPayableSales): ?>
-                                    <p class="help-block"><?= lang('Accounts.no_outstanding_sales') ?></p>
+                                    <p class="help-block"><?= esc($outstandingEmptyMessage) ?></p>
                                 <?php endif; ?>
                                 <?php foreach ($payable_sales as $index => $sale): ?>
                                     <div class="row" style="margin-bottom:4px;">
@@ -571,21 +765,32 @@ $typeChoices = [
                             <?= form_label(lang('Accounts.apply_to_consolidated_invoice'), 'consolidated_invoice_id', ['class' => 'control-label col-xs-3']) ?>
                             <div class="col-xs-5">
                                 <?php
-                                $ciOptions = ['' => lang('Accounts.apply_to_select_ci')];
                                 $defaultCiId = count($openInvoices) === 1
                                     ? (int) $openInvoices[0]['consolidated_invoice_id']
                                     : '';
-                                foreach ($openInvoices as $invoice) {
-                                    $ciOptions[(int) $invoice['consolidated_invoice_id']] =
-                                        $invoice['invoice_number'] . ' — ' . to_currency($invoice['balance']);
-                                }
                                 ?>
-                                <?= form_dropdown(
-                                    'consolidated_invoice_id',
-                                    $ciOptions,
-                                    $defaultCiId,
-                                    'class="form-control input-sm" id="consolidated_invoice_id"'
-                                ) ?>
+                                <select name="consolidated_invoice_id" id="consolidated_invoice_id" class="form-control input-sm">
+                                    <option value=""><?= esc(lang('Accounts.apply_to_select_ci')) ?></option>
+                                    <?php foreach ($openInvoices as $invoice): ?>
+                                        <?php
+                                        $ciId = (int) $invoice['consolidated_invoice_id'];
+                                        $ciBalanceFormatted = to_currency($invoice['balance']);
+                                        ?>
+                                        <option
+                                            value="<?= $ciId ?>"
+                                            data-number="<?= esc($invoice['invoice_number'], 'attr') ?>"
+                                            data-balance-formatted="<?= esc($ciBalanceFormatted, 'attr') ?>"
+                                            <?= $defaultCiId === $ciId ? 'selected' : '' ?>
+                                        >
+                                            <?= esc($invoice['invoice_number']) ?> — <?= esc($ciBalanceFormatted) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <div id="selected-ci-preview" class="selected-ci-preview" style="display:none;">
+                                    <p class="selected-ci-number" id="selected-ci-number"></p>
+                                    <p class="help-block" style="margin:0 0 2px;"><?= lang('Accounts.selected_invoice_balance') ?></p>
+                                    <p class="selected-ci-balance" id="selected-ci-balance"></p>
+                                </div>
                             </div>
                         </div>
                         <div class="form-group form-group-sm reference-group" style="display:none;">
@@ -602,7 +807,7 @@ $typeChoices = [
                         </div>
                         <div class="form-group form-group-sm">
                             <div class="col-xs-offset-3 col-xs-5">
-                                <button type="submit" class="btn btn-primary btn-sm"><?= lang('Accounts.add_payment') ?></button>
+                                <button type="submit" class="btn btn-primary btn-sm"><?= lang('Accounts.submit_payment') ?></button>
                             </div>
                         </div>
                     <?= form_close() ?>
@@ -636,13 +841,14 @@ $typeChoices = [
         <div class="section-loading" style="display:none;"><?= lang('Accounts.loading_records') ?></div>
         <div class="section-error" style="display:none;"></div>
         <div class="section-empty" style="display:none;"></div>
-        <div class="section-table-wrap" style="display:none;">
+        <div class="section-table-wrap table-responsive" style="display:none;">
             <table class="table table-striped table-hover">
                 <thead>
                 <tr>
                     <th><?= lang('Common.id') ?></th>
                     <th><?= lang('Reports.date') ?></th>
                     <th><?= lang('Sales.invoice_number') ?></th>
+                    <th><?= lang('Accounts.consolidated_invoice_ref') ?></th>
                     <th class="text-right"><?= lang('Common.total') ?></th>
                     <th class="text-right"><?= lang('Accounts.amount_paid') ?></th>
                     <th class="text-right"><?= lang('Accounts.balance_due') ?></th>
@@ -661,7 +867,7 @@ $typeChoices = [
         <div class="panel-heading"><?= lang('Accounts.create_consolidated_invoice') ?></div>
         <div class="panel-body">
             <?php if ($eligible_sales === []): ?>
-                <p><?= lang('Accounts.no_outstanding_sales') ?></p>
+                <p><?= esc($outstandingEmptyMessage) ?></p>
             <?php else: ?>
                 <?= form_open('accounts/createInvoice/' . $customer_id, ['id' => 'create-invoice-form', 'class' => 'form-horizontal']) ?>
                     <table class="table table-striped">
@@ -707,7 +913,13 @@ $typeChoices = [
 <?php endif; ?>
 
 <div class="panel panel-default account-section" id="section-ci">
-    <div class="panel-heading"><?= lang('Accounts.consolidated_invoices') ?></div>
+    <div class="panel-heading">
+        <?= lang('Accounts.consolidated_invoices') ?>
+        <span class="pull-right" style="font-weight:normal; font-size:12px;">
+            <?= lang('Accounts.open_invoice_balance') ?>:
+            <strong id="account-open-invoice-balance-display"><?= to_currency($open_invoice_balance ?? 0) ?></strong>
+        </span>
+    </div>
     <div class="panel-body">
         <?= view('accounts/partials/section_filters', [
             'prefix'              => 'ci',
@@ -740,7 +952,7 @@ $typeChoices = [
         <div class="section-loading" style="display:none;"><?= lang('Accounts.loading_records') ?></div>
         <div class="section-error" style="display:none;"></div>
         <div class="section-empty" style="display:none;"></div>
-        <div class="section-table-wrap" style="display:none;">
+        <div class="section-table-wrap table-responsive" style="display:none;">
             <table class="table table-striped table-hover">
                 <thead>
                 <tr>
@@ -749,7 +961,7 @@ $typeChoices = [
                     <th><?= lang('Accounts.status') ?></th>
                     <th class="text-right"><?= lang('Accounts.invoice_total') ?></th>
                     <th class="text-right"><?= lang('Accounts.total_paid') ?></th>
-                    <th class="text-right"><?= lang('Accounts.balance') ?></th>
+                    <th class="text-right"><?= lang('Accounts.balance_due') ?></th>
                     <th></th>
                 </tr>
                 </thead>
@@ -764,6 +976,7 @@ $typeChoices = [
 <div class="panel panel-default account-section" id="section-ledger">
     <div class="panel-heading"><?= lang('Accounts.ledger') ?></div>
     <div class="panel-body">
+        <p class="account-section-help"><?= lang('Accounts.ledger_section_help') ?></p>
         <?= view('accounts/partials/section_filters', [
             'prefix'              => 'ledger',
             'filters'             => $account_filters['ledger'],
@@ -786,7 +999,7 @@ $typeChoices = [
         <div class="section-loading" style="display:none;"><?= lang('Accounts.loading_records') ?></div>
         <div class="section-error" style="display:none;"></div>
         <div class="section-empty" style="display:none;"></div>
-        <div class="section-table-wrap" style="display:none;">
+        <div class="section-table-wrap table-responsive" style="display:none;">
             <table class="table table-striped table-hover" id="ledger-table">
                 <thead>
                 <tr>
@@ -856,6 +1069,7 @@ $typeChoices = [
 <div class="panel panel-default account-section" id="section-tx">
     <div class="panel-heading"><?= lang('Accounts.account_transactions') ?></div>
     <div class="panel-body">
+        <p class="account-section-help"><?= lang('Accounts.transactions_section_help') ?></p>
         <?= view('accounts/partials/section_filters', [
             'prefix'              => 'transaction',
             'filters'             => $account_filters['transaction'],
@@ -882,7 +1096,7 @@ $typeChoices = [
         <div class="section-loading" style="display:none;"><?= lang('Accounts.loading_records') ?></div>
         <div class="section-error" style="display:none;"></div>
         <div class="section-empty" style="display:none;"></div>
-        <div class="section-table-wrap" style="display:none;">
+        <div class="section-table-wrap table-responsive" style="display:none;">
             <table class="table table-striped table-hover">
                 <thead>
                 <tr>
@@ -904,6 +1118,7 @@ $typeChoices = [
 <div class="panel panel-default account-section" id="section-activity">
     <div class="panel-heading"><?= lang('Accounts.account_activity') ?></div>
     <div class="panel-body">
+        <p class="account-section-help"><?= lang('Accounts.activity_section_help') ?></p>
         <?= view('accounts/partials/section_filters', [
             'prefix'              => 'activity',
             'filters'             => $account_filters['activity'],
@@ -930,7 +1145,7 @@ $typeChoices = [
         <div class="section-loading" style="display:none;"><?= lang('Accounts.loading_records') ?></div>
         <div class="section-error" style="display:none;"></div>
         <div class="section-empty" style="display:none;"></div>
-        <div class="section-table-wrap" style="display:none;">
+        <div class="section-table-wrap table-responsive" style="display:none;">
             <table class="table table-striped table-hover">
                 <thead>
                 <tr>
